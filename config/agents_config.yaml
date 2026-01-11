@@ -1,0 +1,348 @@
+# Enterprise Marketing AI Agents Configuration
+# Defines agent roles, capabilities, and behavior
+
+version: "1.0.0"
+system:
+  name: "enterprise-marketing-ai-agents"
+  max_concurrent_agents: 5
+  handoff_timeout: 300  # seconds
+  max_retries: 3
+  log_level: "INFO"
+
+# Agent Definitions
+agents:
+  orchestrator:
+    id: "orchestrator"
+    name: "Orchestrator Agent"
+    description: "Central coordinator managing agent lifecycle and workflows"
+    model:
+      provider: "openai"
+      name: "gpt-4-turbo-preview"
+      temperature: 0.3
+      max_tokens: 2000
+    capabilities:
+      - agent_registry
+      - task_routing
+      - workflow_management
+      - health_monitoring
+      - handoff_coordination
+      - priority_management
+      - circuit_breaking
+    memory:
+      enabled: true
+      type: "hybrid"  # short-term + long-term
+      max_short_term_items: 100
+      long_term_storage: "vector"
+      context_window: 50
+    handoff_rules:
+      - trigger: "marketing_strategy_needed"
+        target: "marketing_strategy"
+        conditions: ["campaign_planning", "content_strategy", "brand_positioning"]
+      - trigger: "customer_support_needed"
+        target: "customer_support"
+        conditions: ["customer_inquiry", "support_ticket", "issue_resolution"]
+      - trigger: "analytics_needed"
+        target: "analytics_evaluation"
+        conditions: ["performance_analysis", "metrics_evaluation", "reporting"]
+      - trigger: "learning_needed"
+        target: "feedback_learning"
+        conditions: ["system_improvement", "model_tuning", "optimization"]
+
+  marketing_strategy:
+    id: "marketing_strategy"
+    name: "Marketing Strategy Agent"
+    description: "Develops marketing strategies and campaign plans"
+    model:
+      provider: "openai"
+      name: "gpt-4-turbo-preview"
+      temperature: 0.7
+      max_tokens: 3000
+    capabilities:
+      - market_research
+      - competitor_analysis
+      - audience_segmentation
+      - content_strategy
+      - channel_optimization
+      - budget_allocation
+      - keyword_research
+      - trend_analysis
+    tools:
+      - name: "market_research_tool"
+        enabled: true
+      - name: "competitor_analysis_tool"
+        enabled: true
+      - name: "audience_segmentation_tool"
+        enabled: true
+      - name: "content_strategy_tool"
+        enabled: true
+      - name: "channel_optimizer"
+        enabled: true
+      - name: "budget_allocator"
+        enabled: true
+      - name: "keyword_research_tool"
+        enabled: true
+      - name: "trend_analyzer"
+        enabled: true
+    memory:
+      enabled: true
+      type: "hybrid"
+      max_short_term_items: 50
+      long_term_storage: "vector"
+      context_window: 30
+    handoff_rules:
+      - trigger: "strategy_validation_needed"
+        target: "analytics_evaluation"
+        conditions: ["performance_forecast", "feasibility_analysis"]
+      - trigger: "customer_insights_needed"
+        target: "customer_support"
+        conditions: ["customer_feedback", "pain_points"]
+      - trigger: "optimization_needed"
+        target: "feedback_learning"
+        conditions: ["strategy_improvement", "past_performance"]
+    output_formats:
+      - "strategy_document"
+      - "campaign_plan"
+      - "content_calendar"
+      - "budget_allocation"
+
+  customer_support:
+    id: "customer_support"
+    name: "Customer Support Agent"
+    description: "Handles customer inquiries and provides support"
+    model:
+      provider: "openai"
+      name: "gpt-4-turbo-preview"
+      temperature: 0.5
+      max_tokens: 2000
+    capabilities:
+      - ticket_management
+      - knowledge_base_search
+      - sentiment_analysis
+      - auto_response
+      - escalation_routing
+      - feedback_collection
+      - customer_profiling
+      - multilingual_support
+    tools:
+      - name: "ticket_manager"
+        enabled: true
+      - name: "knowledge_base_search"
+        enabled: true
+      - name: "sentiment_analyzer"
+        enabled: true
+      - name: "auto_responder"
+        enabled: true
+      - name: "escalation_router"
+        enabled: true
+      - name: "feedback_collector"
+        enabled: true
+      - name: "customer_profile_tool"
+        enabled: true
+      - name: "translation_tool"
+        enabled: false  # Enable when multilingual support needed
+    memory:
+      enabled: true
+      type: "hybrid"
+      max_short_term_items: 75
+      long_term_storage: "database"
+      context_window: 40
+    handoff_rules:
+      - trigger: "strategic_insight_found"
+        target: "marketing_strategy"
+        conditions: ["customer_pattern", "campaign_issue"]
+      - trigger: "analytics_required"
+        target: "analytics_evaluation"
+        conditions: ["sentiment_trends", "feedback_analysis"]
+      - trigger: "system_improvement_identified"
+        target: "feedback_learning"
+        conditions: ["recurring_issues", "process_gaps"]
+    response_time_sla: 60  # seconds
+
+  analytics_evaluation:
+    id: "analytics_evaluation"
+    name: "Analytics & Evaluation Agent"
+    description: "Monitors performance and generates insights"
+    model:
+      provider: "openai"
+      name: "gpt-4-turbo-preview"
+      temperature: 0.2
+      max_tokens: 2500
+    capabilities:
+      - metrics_calculation
+      - report_generation
+      - data_visualization
+      - statistical_analysis
+      - ab_test_analysis
+      - attribution_modeling
+      - forecasting
+      - anomaly_detection
+    tools:
+      - name: "metrics_calculator"
+        enabled: true
+      - name: "report_generator"
+        enabled: true
+      - name: "data_visualizer"
+        enabled: true
+      - name: "statistical_analyzer"
+        enabled: true
+      - name: "ab_test_analyzer"
+        enabled: true
+      - name: "attribution_modeler"
+        enabled: true
+      - name: "forecasting_tool"
+        enabled: true
+      - name: "anomaly_detector"
+        enabled: true
+    memory:
+      enabled: true
+      type: "time_series"
+      max_short_term_items: 100
+      long_term_storage: "time_series_db"
+      context_window: 60
+    handoff_rules:
+      - trigger: "strategic_pivot_needed"
+        target: "marketing_strategy"
+        conditions: ["performance_decline", "new_opportunity"]
+      - trigger: "learning_opportunity"
+        target: "feedback_learning"
+        conditions: ["performance_pattern", "optimization_potential"]
+      - trigger: "customer_issue_detected"
+        target: "customer_support"
+        conditions: ["satisfaction_drop", "churn_risk"]
+    metrics:
+      update_frequency: 300  # seconds
+      retention_period: 365  # days
+
+  feedback_learning:
+    id: "feedback_learning"
+    name: "Feedback & Learning Agent"
+    description: "Continuously improves system through learning"
+    model:
+      provider: "openai"
+      name: "gpt-4-turbo-preview"
+      temperature: 0.4
+      max_tokens: 2000
+    capabilities:
+      - feedback_aggregation
+      - model_evaluation
+      - fine_tuning
+      - workflow_optimization
+      - pattern_detection
+      - experiment_tracking
+      - reinforcement_learning
+      - knowledge_distillation
+    tools:
+      - name: "feedback_aggregator"
+        enabled: true
+      - name: "model_evaluator"
+        enabled: true
+      - name: "fine_tuning_engine"
+        enabled: true
+      - name: "workflow_optimizer"
+        enabled: true
+      - name: "pattern_detector"
+        enabled: true
+      - name: "experiment_tracker"
+        enabled: true
+      - name: "reinforcement_learner"
+        enabled: false  # Enable for advanced RL
+      - name: "knowledge_distiller"
+        enabled: true
+    memory:
+      enabled: true
+      type: "hybrid"
+      max_short_term_items: 50
+      long_term_storage: "vector"
+      context_window: 40
+    handoff_rules:
+      - trigger: "system_update_ready"
+        target: "orchestrator"
+        conditions: ["improvement_validated", "change_approved"]
+      - trigger: "strategic_learning"
+        target: "marketing_strategy"
+        conditions: ["new_pattern_learned", "best_practice_identified"]
+      - trigger: "analysis_needed"
+        target: "analytics_evaluation"
+        conditions: ["learning_validation", "impact_measurement"]
+    learning:
+      evaluation_frequency: 86400  # seconds (daily)
+      min_samples_for_learning: 100
+      confidence_threshold: 0.85
+
+# Shared Resources
+memory:
+  shared_store:
+    type: "redis"
+    host: "localhost"
+    port: 6379
+    db: 0
+    ttl: 86400  # seconds
+  vector_store:
+    type: "faiss"
+    dimension: 1536
+    index_type: "IVFFlat"
+    metric: "cosine"
+
+# Message Bus Configuration
+message_bus:
+  type: "redis_pubsub"
+  host: "localhost"
+  port: 6379
+  channels:
+    - "agent.events"
+    - "handoff.requests"
+    - "workflow.events"
+    - "system.alerts"
+
+# Workflows
+workflows:
+  campaign_launch:
+    name: "Campaign Launch Workflow"
+    steps:
+      - agent: "orchestrator"
+        action: "receive_request"
+      - agent: "marketing_strategy"
+        action: "create_campaign_plan"
+      - agent: "analytics_evaluation"
+        action: "validate_feasibility"
+      - agent: "orchestrator"
+        action: "approve_and_execute"
+      - agent: "feedback_learning"
+        action: "optimize_from_results"
+
+  customer_issue_resolution:
+    name: "Customer Issue Resolution"
+    steps:
+      - agent: "orchestrator"
+        action: "receive_inquiry"
+      - agent: "customer_support"
+        action: "handle_inquiry"
+      - agent: "analytics_evaluation"
+        action: "log_sentiment"
+      - agent: "feedback_learning"
+        action: "analyze_patterns"
+
+# Performance Thresholds
+performance:
+  agent_response_time_max: 30  # seconds
+  handoff_time_max: 5  # seconds
+  workflow_completion_time_max: 600  # seconds
+  error_rate_threshold: 0.05  # 5%
+  memory_usage_max: 1024  # MB per agent
+
+# Security
+security:
+  authentication_required: true
+  api_key_rotation_days: 90
+  max_requests_per_minute: 100
+  allowed_origins:
+    - "localhost"
+    - "127.0.0.1"
+
+# Monitoring
+monitoring:
+  enabled: true
+  metrics_export_interval: 60  # seconds
+  log_retention_days: 30
+  alert_on_errors: true
+  alert_on_performance_degradation: true
