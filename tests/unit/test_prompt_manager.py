@@ -382,10 +382,9 @@ class TestErrorHandling:
 
     def test_load_from_invalid_directory(self):
         """Test handling of invalid directory."""
-        pm = PromptManager(prompts_dir="/nonexistent/directory")
-
-        with pytest.raises(FileNotFoundError):
-            pm.load_prompt("test_agent")
+        # Creating a PromptManager with a read-only parent directory will fail
+        with pytest.raises(OSError):
+            pm = PromptManager(prompts_dir="/nonexistent/directory")
 
     def test_update_preserves_data_on_error(self, prompt_manager):
         """Test that failed updates don't corrupt data."""

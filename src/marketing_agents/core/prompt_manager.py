@@ -118,12 +118,20 @@ class PromptManager:
             try:
                 prompt_file = self.prompts_dir / f"{agent_id}.txt"
 
-                # Generate version ID (timestamp)
-                version_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+                # Generate version ID (timestamp with microseconds for uniqueness)
+                version_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
 
                 # If current prompt exists, save it to history
                 if prompt_file.exists():
                     history_file = self.history_dir / f"{agent_id}_{version_id}.txt"
+                    # Ensure unique filename even with concurrent updates
+                    counter = 0
+                    while history_file.exists():
+                        counter += 1
+                        version_id_unique = f"{version_id}_{counter}"
+                        history_file = (
+                            self.history_dir / f"{agent_id}_{version_id_unique}.txt"
+                        )
                     shutil.copy2(prompt_file, history_file)
 
                 # Write new prompt

@@ -1,0 +1,200 @@
+# Memory Management Configuration
+# Configures memory storage, backends, and session management for agents
+
+version: "1.0.0"
+
+memory:
+  # Storage Configuration
+  storage:
+    # Base directory for memory storage
+    base_dir: "data/processed/memory"
+
+    # Execution records directory (audit trail)
+    execution_records_dir: "data/processed/memory/execution_records"
+
+    # Vector store directory for semantic search
+    vector_store_dir: "data/embeddings"
+
+    # Vector store name for agent memories
+    vector_store_name: "agent_memory"
+
+  # Backend Configuration
+  backend:
+    # Use Redis for short-term memory (recommended for production)
+    # Options: "redis" (distributed, persistent) or "memory" (in-process, fast)
+    type: "redis"
+
+    # Redis configuration (only used if type is "redis")
+    redis:
+      enabled: true
+      host: "localhost"
+      port: 6379
+      db: 0
+      password: null  # Set via REDIS_PASSWORD env var for security
+      # Connection pool settings
+      max_connections: 50
+      socket_timeout: 5
+      socket_connect_timeout: 5
+      retry_on_timeout: true
+      health_check_interval: 30
+
+  # Time-to-Live (TTL) Settings
+  ttl:
+    # Short-term memory TTL (seconds)
+    # Default: 86400 (24 hours)
+    short_term: 86400
+
+    # Session timeout (seconds)
+    # Default: 3600 (1 hour)
+    session_timeout: 3600
+
+    # Cache TTL for semantic search results (seconds)
+    # Default: 1800 (30 minutes)
+    search_cache: 1800
+
+  # Session Management
+  session:
+    # Automatically cleanup sessions on end
+    auto_cleanup: true
+
+    # Maximum conversation history per session
+    max_conversation_history: 100
+
+    # Maximum session duration before force cleanup (seconds)
+    # Default: 14400 (4 hours)
+    max_duration: 14400
+
+    # Enable session persistence across restarts (requires Redis)
+    persist_sessions: true
+
+  # Long-term Memory Settings
+  long_term:
+    # Enable vector-based semantic search
+    enable_vector_search: true
+
+    # Embedding model for vector search
+    embedding_model: "text-embedding-3-small"
+
+    # Embedding dimensions
+    embedding_dimensions: 1536
+
+    # Batch size for embedding generation
+    embedding_batch_size: 100
+
+    # Vector search parameters
+    vector_search:
+      # Default number of similar results to return
+      default_top_k: 5
+
+      # Minimum similarity threshold (0-1)
+      similarity_threshold: 0.7
+
+      # Enable result reranking for better accuracy
+      enable_reranking: true
+
+  # Performance & Optimization
+  performance:
+    # Enable caching for frequently accessed data
+    cache_enabled: true
+
+    # Maximum cache size (number of items)
+    max_cache_size: 1000
+
+    # Cache eviction policy
+    # Options: "lru" (least recently used), "lfu" (least frequently used)
+    cache_policy: "lru"
+
+    # Lazy load vector store (only initialize when needed)
+    lazy_load_vector_store: true
+
+    # Compression for large memory items
+    enable_compression: false
+    compression_threshold: 10240  # bytes (10KB)
+
+  # Execution Records
+  execution_records:
+    # Enable execution tracking
+    enabled: true
+
+    # Storage format
+    # Options: "jsonl" (line-delimited JSON), "json" (array)
+    format: "jsonl"
+
+    # Maximum records per agent before rotation
+    max_records_per_file: 10000
+
+    # Retention period (days)
+    retention_days: 90
+
+    # Include in records
+    include_input: true
+    include_output: true
+    include_metadata: true
+
+  # Monitoring & Logging
+  monitoring:
+    # Enable memory usage monitoring
+    enabled: true
+
+    # Log memory stats interval (seconds)
+    stats_interval: 300  # 5 minutes
+
+    # Alert thresholds
+    alerts:
+      # Short-term memory entries threshold
+      short_term_high: 10000
+
+      # Long-term memory growth rate (entries per hour)
+      long_term_growth_rate: 1000
+
+      # Active sessions threshold
+      active_sessions_high: 100
+
+  # Advanced Features
+  advanced:
+    # Enable multi-tenancy support
+    multi_tenancy: false
+
+    # Enable memory versioning
+    versioning: false
+
+    # Enable memory replication (requires Redis cluster)
+    replication: false
+
+    # Enable memory encryption at rest
+    encryption: false
+
+# Environment-specific Overrides
+environments:
+  development:
+    backend:
+      type: "memory"  # Use in-memory for dev (faster)
+    session:
+      auto_cleanup: true
+      max_conversation_history: 50
+    monitoring:
+      enabled: false
+
+  staging:
+    backend:
+      type: "redis"
+    ttl:
+      short_term: 43200  # 12 hours
+      session_timeout: 1800  # 30 minutes
+    monitoring:
+      enabled: true
+
+  production:
+    backend:
+      type: "redis"
+    ttl:
+      short_term: 86400  # 24 hours
+      session_timeout: 3600  # 1 hour
+    session:
+      persist_sessions: true
+    monitoring:
+      enabled: true
+      stats_interval: 60  # 1 minute
+    advanced:
+      replication: true
+      encryption: true

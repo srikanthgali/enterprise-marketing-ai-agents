@@ -1,0 +1,14 @@
+{
+    "python.testing.pytestArgs": [
+        "tests",
+        "-v",
+        "--tb=short",
+        "-p",
+        "no:cacheprovider",
+        "-s"
+    ],
+    "python.testing.unittestEnabled": false,
+    "python.testing.pytestEnabled": true,
+    "python.testing.autoTestDiscoverOnSaveEnabled": false,
+    "python.envFile": "${workspaceFolder}/.env"
+}

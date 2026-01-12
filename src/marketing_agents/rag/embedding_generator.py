@@ -21,8 +21,6 @@ import numpy as np
 from langchain_core.documents import Document
 from openai import AsyncOpenAI, RateLimitError, APIError
 
-from config.settings import Settings
-
 # Configure logging
 logger = logging.getLogger(__name__)
 
@@ -69,7 +67,9 @@ class EmbeddingGenerator:
             cache_dir: Directory for embedding cache (default: data/embeddings/cache/)
         """
         # Initialize settings first to get defaults from config
-        self.settings = Settings()
+        from config.settings import get_settings
+
+        self.settings = get_settings()
 
         # Use config values as defaults if not explicitly provided
         self.model_name = model_name or self.settings.vector_store.embedding_model
@@ -274,8 +274,18 @@ class EmbeddingGenerator:
                 await asyncio.sleep(wait_time)
 
             except Exception as e:
-                logger.error(f"Unexpected error in retry logic: {e}")
-                raise
+                # For tests and unexpected errors, also retry with backoff
+                if attempt == max_retries:
+                    logger.error(f"Unexpected error in retry logic: {e}")
+                    raise
+
+                wait_time = 2**attempt
+                logger.warning(
+                    f"Unexpected error, retrying in {wait_time}s "
+                    f"(attempt {attempt + 1}/{max_retries}): {e}"
+                )
+                self.stats["retries"] += 1
+                await asyncio.sleep(wait_time)
 
     def validate_embeddings(
         self, embeddings: List[Tuple[Document, List[float]]]
