@@ -76,6 +76,13 @@ class VectorStoreSettings(BaseSettings):
     metric: str = Field(default="cosine", env="VECTOR_METRIC")
     persist_directory: str = Field(default="data/embeddings", env="VECTOR_PERSIST_DIR")
 
+    # Embedding model configuration
+    embedding_model: str = Field(
+        default="text-embedding-3-small", env="EMBEDDING_MODEL"
+    )
+    embedding_batch_size: int = Field(default=100, env="EMBEDDING_BATCH_SIZE")
+    embedding_cache_enabled: bool = Field(default=True, env="EMBEDDING_CACHE_ENABLED")
+
 
 class SystemSettings(BaseSettings):
     """System-level configuration."""
