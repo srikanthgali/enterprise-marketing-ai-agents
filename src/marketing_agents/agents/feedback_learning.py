@@ -20,11 +20,14 @@ from ..tools.pattern_detector import PatternDetector
 class FeedbackLearningAgent(BaseAgent):
     """Specialized agent for system improvement through learning."""
 
-    def __init__(self, agent_id: str, config: Optional[Dict] = None):
+    def __init__(
+        self,
+        config: Dict[str, Any],
+        memory_manager=None,
+        message_bus=None,
+        prompt_manager=None,
+    ):
         """Initialize feedback learning agent."""
-        if config is None:
-            config = {}
-
         # Initialize our attributes BEFORE calling super().__init__
         # because _register_tools() is called from BaseAgent.__init__
         self.feedback_queue: List[Dict] = []
@@ -41,13 +44,14 @@ class FeedbackLearningAgent(BaseAgent):
             "user_satisfaction": 0.80,
         }
 
-        name = config.get("name", "Feedback & Learning Agent")
-        description = config.get(
-            "description", "Continuously improves system through learning"
-        )
-
         super().__init__(
-            agent_id=agent_id, name=name, description=description, config=config
+            agent_id="feedback_learning",
+            name="Feedback & Learning Agent",
+            description="Continuously improves system through learning",
+            config=config,
+            memory_manager=memory_manager,
+            message_bus=message_bus,
+            prompt_manager=prompt_manager,
         )
 
     def _register_tools(self) -> None:

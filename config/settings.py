@@ -206,6 +206,36 @@ class SecuritySettings(BaseSettings):
         return v
 
 
+class FastAPISettings(BaseSettings):
+    """FastAPI application settings."""
+
+    host: str = Field(default="0.0.0.0", env="API_HOST")
+    port: int = Field(default=8000, env="API_PORT")
+    reload: bool = Field(default=True, env="API_RELOAD")
+    workers: int = Field(default=1, env="API_WORKERS")
+    log_level: str = Field(default="info", env="API_LOG_LEVEL")
+
+    # CORS settings
+    cors_enabled: bool = Field(default=True, env="CORS_ENABLED")
+
+    # Rate limiting
+    rate_limit_enabled: bool = Field(default=True, env="RATE_LIMIT_ENABLED")
+    rate_limit_requests: int = Field(default=100, env="RATE_LIMIT_REQUESTS")
+    rate_limit_period: int = Field(default=60, env="RATE_LIMIT_PERIOD")  # seconds
+
+    # Request timeouts
+    request_timeout: int = Field(default=300, env="REQUEST_TIMEOUT")  # seconds
+
+    @field_validator("log_level")
+    @classmethod
+    def validate_log_level(cls, v):
+        """Validate log level."""
+        valid = ["debug", "info", "warning", "error", "critical"]
+        if v.lower() not in valid:
+            raise ValueError(f"Log level must be one of {valid}")
+        return v.lower()
+
+
 class Settings(BaseSettings):
     """Main application settings."""
 
@@ -232,11 +262,13 @@ class Settings(BaseSettings):
     memory: MemorySettings = Field(default_factory=MemorySettings)
     system: SystemSettings = Field(default_factory=SystemSettings)
     security: SecuritySettings = Field(default_factory=SecuritySettings)
+    fastapi: FastAPISettings = Field(default_factory=FastAPISettings)
 
     # Agent configuration
     agents_config: Optional[Dict[str, Any]] = None
     models_config: Optional[Dict[str, Any]] = None
     memory_config: Optional[Dict[str, Any]] = None
+    api_config: Optional[Dict[str, Any]] = None
 
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", case_sensitive=False, extra="allow"
@@ -248,7 +280,9 @@ class Settings(BaseSettings):
         self._load_agent_config()
         self._load_models_config()
         self._load_memory_config()
+        self._load_api_config()
         self._apply_memory_config()
+        self._apply_api_config()
         self._ensure_directories()
 
     def _load_agent_config(self) -> None:
@@ -271,6 +305,13 @@ class Settings(BaseSettings):
         if config_path.exists():
             with open(config_path, "r") as f:
                 self.memory_config = yaml.safe_load(f)
+
+    def _load_api_config(self) -> None:
+        """Load API configuration from YAML."""
+        config_path = self.config_dir / "api_config.yaml"
+        if config_path.exists():
+            with open(config_path, "r") as f:
+                self.api_config = yaml.safe_load(f)
 
     def _apply_memory_config(self) -> None:
         """Apply memory configuration from YAML to memory settings."""
@@ -425,6 +466,62 @@ class Settings(BaseSettings):
                     "active_sessions_high", self.memory.alert_active_sessions_high
                 )
 
+    def _apply_api_config(self) -> None:
+        """Apply API configuration from YAML to FastAPI settings."""
+        if not self.api_config:
+            return
+
+        # Get current environment
+        env = self.system.environment
+
+        # Start with base API config
+        api_config = self.api_config.get("fastapi", {})
+
+        # Apply environment-specific overrides
+        env_overrides = self.api_config.get("environments", {}).get(env, {})
+        if env_overrides and "fastapi" in env_overrides:
+            for key, value in env_overrides["fastapi"].items():
+                api_config[key] = value
+
+        # Apply to FastAPI settings
+        if "host" in api_config:
+            self.fastapi.host = api_config["host"]
+        if "port" in api_config:
+            self.fastapi.port = api_config["port"]
+        if "reload" in api_config:
+            self.fastapi.reload = api_config["reload"]
+        if "workers" in api_config:
+            self.fastapi.workers = api_config["workers"]
+        if "log_level" in api_config:
+            self.fastapi.log_level = api_config["log_level"]
+
+        # Apply CORS settings
+        if "cors" in api_config:
+            cors = api_config["cors"]
+            self.fastapi.cors_enabled = cors.get("enabled", self.fastapi.cors_enabled)
+
+        # Apply rate limiting
+        if "rate_limit" in api_config:
+            rl = api_config["rate_limit"]
+            self.fastapi.rate_limit_enabled = rl.get(
+                "enabled", self.fastapi.rate_limit_enabled
+            )
+            if "requests_per_minute" in rl:
+                self.fastapi.rate_limit_requests = rl["requests_per_minute"]
+
+        # Apply timeouts
+        if "timeouts" in api_config:
+            timeouts = api_config["timeouts"]
+            if "request" in timeouts:
+                self.fastapi.request_timeout = timeouts["request"]
+
+        # Apply authentication settings from environment overrides
+        if env_overrides and "authentication" in env_overrides:
+            auth = env_overrides["authentication"]
+            self.security.authentication_required = auth.get(
+                "enabled", self.security.authentication_required
+            )
+
     def _ensure_directories(self) -> None:
         """Ensure required directories exist."""
         directories = [
@@ -454,6 +551,18 @@ class Settings(BaseSettings):
         """Get configuration for a specific model."""
         if self.models_config:
             return self.models_config.get(provider, {}).get(model_name)
+        return None
+
+    def get_workflow_config(self, workflow_id: str) -> Optional[Dict[str, Any]]:
+        """Get configuration for a specific workflow."""
+        if self.api_config:
+            return self.api_config.get("workflows", {}).get(workflow_id)
+        return None
+
+    def get_endpoint_config(self, endpoint_category: str) -> Optional[Dict[str, Any]]:
+        """Get configuration for API endpoints."""
+        if self.api_config:
+            return self.api_config.get("endpoints", {}).get(endpoint_category)
         return None
 
 

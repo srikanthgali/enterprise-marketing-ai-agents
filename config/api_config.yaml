@@ -1,0 +1,342 @@
+# API Configuration for Enterprise Marketing AI Agents
+# FastAPI application settings, endpoints, and workflow definitions
+
+version: "1.0.0"
+
+# FastAPI Application Settings
+fastapi:
+  host: "0.0.0.0"
+  port: 8000
+  reload: true
+  workers: 1
+  log_level: "info"
+  title: "Enterprise Marketing AI Agents API"
+  description: "Production-ready REST API for multi-agent marketing system"
+
+  # CORS Configuration
+  cors:
+    enabled: true
+    allow_origins:
+      - "http://localhost"
+      - "http://localhost:3000"
+      - "http://localhost:8080"
+      - "http://127.0.0.1"
+    allow_credentials: true
+    allow_methods: ["*"]
+    allow_headers: ["*"]
+
+  # Rate Limiting
+  rate_limit:
+    enabled: true
+    requests_per_minute: 100
+    requests_per_hour: 1000
+    burst_size: 10
+    storage: "memory"  # "memory" or "redis"
+
+  # Timeouts
+  timeouts:
+    request: 300  # seconds
+    workflow: 600  # seconds
+    agent_execution: 180  # seconds
+
+  # Authentication
+  authentication:
+    enabled: false  # Set to true in production
+    type: "bearer"  # "bearer", "api_key", "oauth2"
+    token_expiry: 3600  # seconds
+    refresh_enabled: true
+
+# API Endpoints Configuration
+endpoints:
+  # Agent Management
+  agents:
+    list:
+      path: "/api/v1/agents"
+      method: "GET"
+      cache_ttl: 60  # seconds
+      description: "List all available agents"
+
+    details:
+      path: "/api/v1/agents/{agent_id}"
+      method: "GET"
+      cache_ttl: 30
+      description: "Get specific agent details"
+
+    execute:
+      path: "/api/v1/agents/{agent_id}/execute"
+      method: "POST"
+      timeout: 180
+      retry_count: 1
+      description: "Execute agent task"
+
+    history:
+      path: "/api/v1/agents/{agent_id}/history"
+      method: "GET"
+      cache_ttl: 30
+      max_results: 100
+      description: "Get agent execution history"
+
+  # Workflow Management
+  workflows:
+    campaign_launch:
+      path: "/api/v1/workflows/campaign-launch"
+      method: "POST"
+      timeout: 600
+      background: true
+      agents: ["marketing_strategy", "analytics_evaluation"]
+      description: "Launch campaign creation workflow"
+      validation:
+        required_fields: ["campaign_name", "objectives", "target_audience", "budget", "duration_weeks"]
+        budget:
+          min: 1000
+          max: 10000000
+        duration_weeks:
+          min: 1
+          max: 52
+
+    customer_support:
+      path: "/api/v1/workflows/customer-support"
+      method: "POST"
+      timeout: 300
+      background: true
+      agents: ["customer_support", "feedback_learning"]
+      description: "Handle customer support inquiry"
+      validation:
+        required_fields: ["inquiry"]
+        max_inquiry_length: 5000
+
+    analytics:
+      path: "/api/v1/workflows/analytics"
+      method: "POST"
+      timeout: 300
+      background: true
+      agents: ["analytics_evaluation"]
+      description: "Generate analytics report"
+      validation:
+        required_fields: ["report_type", "date_range"]
+
+    status:
+      path: "/api/v1/workflows/{workflow_id}"
+      method: "GET"
+      cache_ttl: 5
+      description: "Get workflow status"
+
+    results:
+      path: "/api/v1/workflows/{workflow_id}/results"
+      method: "GET"
+      cache_ttl: 60
+      description: "Get workflow results"
+
+  # Health & Metrics
+  health:
+    path: "/api/v1/health"
+    method: "GET"
+    cache_ttl: 10
+    timeout: 5
+    description: "System health check"
+
+  metrics:
+    path: "/api/v1/metrics"
+    method: "GET"
+    cache_ttl: 30
+    description: "System metrics and statistics"
+
+# Workflow Definitions
+workflows:
+  campaign_launch:
+    name: "Campaign Launch Workflow"
+    description: "End-to-end campaign creation and validation"
+    steps:
+      - agent: "orchestrator"
+        action: "route_task"
+        timeout: 10
+      - agent: "marketing_strategy"
+        action: "create_campaign_plan"
+        timeout: 120
+        retry_on_failure: true
+      - agent: "analytics_evaluation"
+        action: "validate_feasibility"
+        timeout: 60
+        optional: false
+      - agent: "feedback_learning"
+        action: "apply_best_practices"
+        timeout: 30
+        optional: true
+
+    success_criteria:
+      - "campaign_plan_created"
+      - "feasibility_validated"
+
+    fallback:
+      - agent: "customer_support"
+        action: "escalate_to_human"
+
+    notifications:
+      on_start: true
+      on_complete: true
+      on_error: true
+
+  customer_support:
+    name: "Customer Support Workflow"
+    description: "Automated customer inquiry handling"
+    steps:
+      - agent: "orchestrator"
+        action: "route_task"
+        timeout: 5
+      - agent: "customer_support"
+        action: "analyze_inquiry"
+        timeout: 30
+      - agent: "customer_support"
+        action: "search_knowledge_base"
+        timeout: 30
+      - agent: "customer_support"
+        action: "generate_response"
+        timeout: 60
+      - agent: "feedback_learning"
+        action: "learn_from_interaction"
+        timeout: 20
+        optional: true
+
+    success_criteria:
+      - "response_generated"
+      - "customer_satisfied"
+
+    escalation:
+      conditions:
+        - "high_urgency"
+        - "no_solution_found"
+        - "customer_dissatisfied"
+      action: "escalate_to_human"
+
+  analytics:
+    name: "Analytics Report Generation"
+    description: "Generate comprehensive analytics reports"
+    steps:
+      - agent: "orchestrator"
+        action: "route_task"
+        timeout: 5
+      - agent: "analytics_evaluation"
+        action: "collect_data"
+        timeout: 60
+      - agent: "analytics_evaluation"
+        action: "calculate_metrics"
+        timeout: 90
+      - agent: "analytics_evaluation"
+        action: "generate_report"
+        timeout: 120
+      - agent: "feedback_learning"
+        action: "track_insights"
+        timeout: 20
+        optional: true
+
+    success_criteria:
+      - "report_generated"
+      - "metrics_calculated"
+
+    caching:
+      enabled: true
+      ttl: 3600  # 1 hour
+
+# Error Handling
+error_handling:
+  default_error_message: "An error occurred processing your request"
+  include_details: false  # Set to true only in development
+  retry_strategy:
+    max_attempts: 3
+    backoff_multiplier: 2
+    initial_delay: 1  # seconds
+
+  error_codes:
+    400: "Bad Request - Invalid input parameters"
+    401: "Unauthorized - Authentication required"
+    403: "Forbidden - Insufficient permissions"
+    404: "Not Found - Resource does not exist"
+    422: "Validation Error - Invalid request data"
+    429: "Rate Limit Exceeded"
+    500: "Internal Server Error"
+    503: "Service Unavailable - System overloaded"
+
+# Response Configuration
+responses:
+  default_format: "json"
+  include_metadata: true
+  metadata_fields:
+    - "timestamp"
+    - "request_id"
+    - "version"
+    - "execution_time"
+
+  compression:
+    enabled: true
+    min_size: 1024  # bytes
+    algorithm: "gzip"
+
+  pagination:
+    default_limit: 50
+    max_limit: 1000
+    offset_based: true
+
+# Monitoring & Logging
+monitoring:
+  request_logging:
+    enabled: true
+    include_body: false  # Set to true only for debugging
+    include_headers: false
+    max_body_size: 10240  # bytes
+
+  performance_tracking:
+    enabled: true
+    slow_request_threshold: 5000  # milliseconds
+    track_agent_execution: true
+
+  metrics_collection:
+    enabled: true
+    interval: 60  # seconds
+    retention_days: 30
+
+  health_checks:
+    interval: 30  # seconds
+    endpoints:
+      - "/api/v1/health"
+    alert_on_failure: true
+
+# Environment-Specific Overrides
+environments:
+  development:
+    fastapi:
+      reload: true
+      workers: 1
+      log_level: "debug"
+    authentication:
+      enabled: false
+    rate_limit:
+      enabled: false
+    error_handling:
+      include_details: true
+
+  staging:
+    fastapi:
+      reload: false
+      workers: 2
+      log_level: "info"
+    authentication:
+      enabled: true
+    rate_limit:
+      enabled: true
+      requests_per_minute: 200
+
+  production:
+    fastapi:
+      reload: false
+      workers: 4
+      log_level: "warning"
+    authentication:
+      enabled: true
+    rate_limit:
+      enabled: true
+      requests_per_minute: 1000
+    error_handling:
+      include_details: false
+    monitoring:
+      request_logging:
+        include_body: false

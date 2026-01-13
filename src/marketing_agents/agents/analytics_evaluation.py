@@ -32,11 +32,51 @@ from ..tools.visualization import (
 class AnalyticsEvaluationAgent(BaseAgent):
     """Specialized agent for analytics and performance evaluation."""
 
-    def __init__(self, agent_id: str, config: Optional[Dict] = None):
+    def __init__(
+        self,
+        config: Dict[str, Any],
+        memory_manager=None,
+        message_bus=None,
+        prompt_manager=None,
+    ):
         """Initialize analytics agent."""
-        super().__init__(agent_id, config)
+        super().__init__(
+            agent_id="analytics_evaluation",
+            name="Analytics Evaluation Agent",
+            description="Monitors performance and generates insights",
+            config=config,
+            memory_manager=memory_manager,
+            message_bus=message_bus,
+            prompt_manager=prompt_manager,
+        )
         self.metrics_history: List[Dict] = []
         self.kpi_definitions = {}
+
+    def _register_tools(self) -> None:
+        """Register analytics-specific tools."""
+        self.register_tool("calculate_metrics", self._calculate_metrics_tool)
+        self.register_tool("generate_report", self._generate_report_tool)
+        self.register_tool("forecast_performance", self._forecast_tool)
+        self.register_tool("detect_anomalies", self._detect_anomalies_tool)
+        self.logger.info(f"Registered {len(self.tools)} tools for analytics agent")
+
+    async def _calculate_metrics_tool(
+        self, time_range: str = "24h", metric_types: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        """Tool wrapper for metrics calculation."""
+        return self._calculate_metrics(time_range, metric_types)
+
+    async def _generate_report_tool(self, metrics: Dict[str, Any]) -> str:
+        """Tool wrapper for report generation."""
+        return self._generate_report(metrics)
+
+    async def _forecast_tool(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Tool wrapper for forecasting."""
+        return {"forecast": "Forecast data", "confidence": 0.85}
+
+    async def _detect_anomalies_tool(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Tool wrapper for anomaly detection."""
+        return {"anomalies": [], "threshold": 0.95}
 
     async def process(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """Process analytics request."""

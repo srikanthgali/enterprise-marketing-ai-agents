@@ -1,6 +1,8 @@
 """Request models for API endpoints."""
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
+from typing import Optional, Dict, Any, List
+from datetime import datetime
 
 
 class PromptUpdateRequest(BaseModel):
@@ -14,3 +16,151 @@ class RollbackRequest(BaseModel):
     """Request model for rolling back a prompt."""
 
     version_id: str = Field(..., description="Version ID to rollback to")
+
+
+class AgentExecuteRequest(BaseModel):
+    """Request model for agent execution."""
+
+    task_data: Dict[str, Any] = Field(
+        ...,
+        description="Task data to pass to the agent",
+        example={"query": "Analyze campaign performance"},
+    )
+    session_id: Optional[str] = Field(
+        None, description="Optional session ID for conversation context"
+    )
+    priority: Optional[str] = Field(
+        "medium", description="Task priority", example="high"
+    )
+
+    @validator("priority")
+    def validate_priority(cls, v):
+        """Validate priority level."""
+        valid = ["low", "medium", "high", "critical"]
+        if v not in valid:
+            raise ValueError(f"Priority must be one of {valid}")
+        return v
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "task_data": {
+                    "query": "Analyze Q1 campaign performance",
+                    "metrics": ["ctr", "conversions", "roi"],
+                },
+                "session_id": "sess_123abc",
+                "priority": "high",
+            }
+        }
+
+
+class CampaignLaunchRequest(BaseModel):
+    """Request model for campaign launch workflow."""
+
+    campaign_name: str = Field(..., description="Name of the campaign", min_length=1)
+    objectives: List[str] = Field(
+        ..., description="Campaign objectives", example=["awareness", "leads"]
+    )
+    target_audience: str = Field(
+        ..., description="Target audience description", min_length=1
+    )
+    budget: float = Field(..., description="Campaign budget in dollars", gt=0)
+    duration_weeks: int = Field(
+        ..., description="Campaign duration in weeks", gt=0, le=52
+    )
+    channels: Optional[List[str]] = Field(None, description="Marketing channels to use")
+    additional_context: Optional[Dict[str, Any]] = Field(
+        None, description="Additional campaign context"
+    )
+
+    @validator("objectives")
+    def validate_objectives(cls, v):
+        """Validate objectives."""
+        valid = ["awareness", "leads", "conversions", "retention", "engagement"]
+        for obj in v:
+            if obj not in valid:
+                raise ValueError(f"Each objective must be one of {valid}, got: {obj}")
+        return v
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "campaign_name": "Q2 Product Launch",
+                "objectives": ["awareness", "leads"],
+                "target_audience": "B2B SaaS companies",
+                "budget": 75000,
+                "duration_weeks": 12,
+                "channels": ["email", "social", "content"],
+            }
+        }
+
+
+class CustomerSupportRequest(BaseModel):
+    """Request model for customer support workflow."""
+
+    inquiry: str = Field(..., description="Customer inquiry or question", min_length=1)
+    customer_id: Optional[str] = Field(None, description="Customer ID if available")
+    context: Optional[Dict[str, Any]] = Field(
+        None, description="Additional context about the inquiry"
+    )
+    urgency: Optional[str] = Field("normal", description="Urgency level")
+
+    @validator("urgency")
+    def validate_urgency(cls, v):
+        """Validate urgency level."""
+        valid = ["low", "normal", "high", "critical"]
+        if v not in valid:
+            raise ValueError(f"Urgency must be one of {valid}")
+        return v
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "inquiry": "How do I integrate the payment API?",
+                "customer_id": "cust_abc123",
+                "context": {"product": "Payment API", "plan": "Enterprise"},
+                "urgency": "high",
+            }
+        }
+
+
+class AnalyticsRequest(BaseModel):
+    """Request model for analytics report generation."""
+
+    report_type: str = Field(..., description="Type of analytics report to generate")
+    date_range: Dict[str, str] = Field(
+        ...,
+        description="Date range for the report",
+        example={"start": "2026-01-01", "end": "2026-01-31"},
+    )
+    metrics: Optional[List[str]] = Field(
+        None, description="Specific metrics to include"
+    )
+    filters: Optional[Dict[str, Any]] = Field(None, description="Additional filters")
+    format: Optional[str] = Field("json", description="Output format")
+
+    @validator("report_type")
+    def validate_report_type(cls, v):
+        """Validate report type."""
+        valid = ["campaign_performance", "customer_engagement", "revenue", "trends"]
+        if v not in valid:
+            raise ValueError(f"Report type must be one of {valid}")
+        return v
+
+    @validator("format")
+    def validate_format(cls, v):
+        """Validate output format."""
+        valid = ["json", "pdf", "csv"]
+        if v not in valid:
+            raise ValueError(f"Format must be one of {valid}")
+        return v
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "report_type": "campaign_performance",
+                "date_range": {"start": "2026-01-01", "end": "2026-01-31"},
+                "metrics": ["ctr", "conversions", "roi"],
+                "format": "json",
+            }
+        }

@@ -1,0 +1,377 @@
+"""
+Workflow execution API routes.
+
+Endpoints for executing multi-agent workflows.
+"""
+
+from fastapi import APIRouter, HTTPException, Depends, status, BackgroundTasks
+from typing import Dict, Any
+import uuid
+from datetime import datetime, timedelta
+
+from api.schemas.request import (
+    CampaignLaunchRequest,
+    CustomerSupportRequest,
+    AnalyticsRequest,
+)
+from api.schemas.response import (
+    WorkflowStatusResponse,
+    WorkflowResultResponse,
+    ErrorResponse,
+)
+from api.dependencies import get_orchestrator, get_memory_manager
+from config.settings import get_settings
+
+router = APIRouter(prefix="/workflows", tags=["workflows"])
+
+# In-memory workflow state storage (in production, use Redis or database)
+workflow_states: Dict[str, Dict[str, Any]] = {}
+
+
+def get_workflow_timeout(workflow_type: str) -> int:
+    """Get timeout for workflow from config."""
+    settings = get_settings()
+    workflow_config = settings.get_workflow_config(workflow_type)
+    if workflow_config:
+        # Calculate total timeout from steps
+        timeout = sum(
+            step.get("timeout", 60) for step in workflow_config.get("steps", [])
+        )
+        return timeout
+    # Default timeouts
+    defaults = {
+        "campaign_launch": 600,
+        "customer_support": 300,
+        "analytics": 300,
+    }
+    return defaults.get(workflow_type, 300)
+
+
+async def execute_workflow_async(
+    workflow_id: str,
+    workflow_type: str,
+    task_data: Dict[str, Any],
+    orchestrator,
+    memory_manager,
+):
+    """
+    Execute workflow asynchronously in background.
+
+    Args:
+        workflow_id: Unique workflow identifier
+        workflow_type: Type of workflow
+        task_data: Data for the workflow
+        orchestrator: Orchestrator agent instance
+        memory_manager: Memory manager instance
+    """
+    workflow_states[workflow_id]["status"] = "in_progress"
+    workflow_states[workflow_id]["started_at"] = datetime.now()
+
+    try:
+        # Execute the workflow
+        result = await orchestrator.process(
+            {
+                "task_type": workflow_type,
+                "data": task_data,
+                "workflow_id": workflow_id,
+            }
+        )
+
+        # Update workflow state
+        workflow_states[workflow_id].update(
+            {
+                "status": "completed",
+                "completed_at": datetime.now(),
+                "result": result,
+                "error": None,
+            }
+        )
+
+    except Exception as e:
+        workflow_states[workflow_id].update(
+            {
+                "status": "failed",
+                "completed_at": datetime.now(),
+                "error": str(e),
+            }
+        )
+
+
+@router.post("/campaign-launch", response_model=WorkflowStatusResponse)
+async def launch_campaign(
+    request: CampaignLaunchRequest,
+    background_tasks: BackgroundTasks,
+    orchestrator=Depends(get_orchestrator),
+    memory_manager=Depends(get_memory_manager),
+):
+    """
+    Launch a campaign creation workflow.
+
+    This workflow involves:
+    1. Marketing Strategy Agent - Creates campaign plan
+    2. Analytics Evaluation Agent - Validates feasibility
+    3. Feedback Learning Agent - Applies learned best practices
+
+    Args:
+        request: Campaign launch request
+
+    Returns:
+        Workflow status with workflow_id for tracking
+    """
+    workflow_id = f"wf_{uuid.uuid4().hex[:12]}"
+
+    # Get workflow configuration
+    settings = get_settings()
+    workflow_config = settings.get_workflow_config("campaign_launch")
+    timeout_minutes = get_workflow_timeout("campaign_launch") // 60
+
+    # Initialize workflow state
+    workflow_states[workflow_id] = {
+        "workflow_id": workflow_id,
+        "workflow_type": "campaign_launch",
+        "status": "pending",
+        "current_agent": None,
+        "progress": 0.0,
+        "started_at": None,
+        "completed_at": None,
+        "estimated_completion": datetime.now() + timedelta(minutes=timeout_minutes),
+        "agents_executed": [],
+        "error": None,
+        "request_data": request.dict(),
+        "config": workflow_config,
+    }
+
+    # Start workflow in background
+    background_tasks.add_task(
+        execute_workflow_async,
+        workflow_id,
+        "campaign_launch",
+        request.dict(),
+        orchestrator,
+        memory_manager,
+    )
+
+    return WorkflowStatusResponse(
+        workflow_id=workflow_id,
+        workflow_type="campaign_launch",
+        status="pending",
+        current_agent=None,
+        progress=0.0,
+        started_at=datetime.now(),
+        completed_at=None,
+        estimated_completion=datetime.now() + timedelta(minutes=timeout_minutes),
+        agents_executed=[],
+        error=None,
+    )
+
+
+@router.post("/customer-support", response_model=WorkflowStatusResponse)
+async def handle_support_inquiry(
+    request: CustomerSupportRequest,
+    background_tasks: BackgroundTasks,
+    orchestrator=Depends(get_orchestrator),
+    memory_manager=Depends(get_memory_manager),
+):
+    """
+    Handle a customer support inquiry workflow.
+
+    This workflow routes to the Customer Support Agent which can:
+    - Search knowledge base for answers
+    - Escalate to human support if needed
+    - Learn from resolution patterns
+
+    Args:
+        request: Customer support request
+
+    Returns:
+        Workflow status with workflow_id for tracking
+    """
+    workflow_id = f"wf_{uuid.uuid4().hex[:12]}"
+
+    # Initialize workflow state
+    workflow_states[workflow_id] = {
+        "workflow_id": workflow_id,
+        "workflow_type": "customer_support",
+        "status": "pending",
+        "current_agent": None,
+        "progress": 0.0,
+        "started_at": None,
+        "completed_at": None,
+        "estimated_completion": datetime.now() + timedelta(minutes=2),
+        "agents_executed": [],
+        "error": None,
+        "request_data": request.dict(),
+    }
+
+    # Start workflow in background
+    background_tasks.add_task(
+        execute_workflow_async,
+        workflow_id,
+        "customer_support",
+        request.dict(),
+        orchestrator,
+        memory_manager,
+    )
+
+    return WorkflowStatusResponse(
+        workflow_id=workflow_id,
+        workflow_type="customer_support",
+        status="pending",
+        current_agent=None,
+        progress=0.0,
+        started_at=datetime.now(),
+        completed_at=None,
+        estimated_completion=datetime.now() + timedelta(minutes=2),
+        agents_executed=[],
+        error=None,
+    )
+
+
+@router.post("/analytics", response_model=WorkflowStatusResponse)
+async def generate_analytics_report(
+    request: AnalyticsRequest,
+    background_tasks: BackgroundTasks,
+    orchestrator=Depends(get_orchestrator),
+    memory_manager=Depends(get_memory_manager),
+):
+    """
+    Generate an analytics report workflow.
+
+    This workflow uses the Analytics Evaluation Agent to:
+    - Analyze campaign performance data
+    - Generate insights and recommendations
+    - Create visualizations and reports
+
+    Args:
+        request: Analytics report request
+
+    Returns:
+        Workflow status with workflow_id for tracking
+    """
+    workflow_id = f"wf_{uuid.uuid4().hex[:12]}"
+
+    # Initialize workflow state
+    workflow_states[workflow_id] = {
+        "workflow_id": workflow_id,
+        "workflow_type": "analytics",
+        "status": "pending",
+        "current_agent": None,
+        "progress": 0.0,
+        "started_at": None,
+        "completed_at": None,
+        "estimated_completion": datetime.now() + timedelta(minutes=3),
+        "agents_executed": [],
+        "error": None,
+        "request_data": request.dict(),
+    }
+
+    # Start workflow in background
+    background_tasks.add_task(
+        execute_workflow_async,
+        workflow_id,
+        "analytics",
+        request.dict(),
+        orchestrator,
+        memory_manager,
+    )
+
+    return WorkflowStatusResponse(
+        workflow_id=workflow_id,
+        workflow_type="analytics",
+        status="pending",
+        current_agent=None,
+        progress=0.0,
+        started_at=datetime.now(),
+        completed_at=None,
+        estimated_completion=datetime.now() + timedelta(minutes=3),
+        agents_executed=[],
+        error=None,
+    )
+
+
+@router.get("/{workflow_id}", response_model=WorkflowStatusResponse)
+async def get_workflow_status(workflow_id: str):
+    """
+    Get the current status of a workflow.
+
+    Args:
+        workflow_id: The workflow identifier
+
+    Returns:
+        Current workflow status
+    """
+    if workflow_id not in workflow_states:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Workflow '{workflow_id}' not found",
+        )
+
+    state = workflow_states[workflow_id]
+
+    return WorkflowStatusResponse(
+        workflow_id=workflow_id,
+        workflow_type=state["workflow_type"],
+        status=state["status"],
+        current_agent=state.get("current_agent"),
+        progress=state.get("progress", 0.0),
+        started_at=state.get("started_at", datetime.now()),
+        completed_at=state.get("completed_at"),
+        estimated_completion=state.get("estimated_completion"),
+        agents_executed=state.get("agents_executed", []),
+        error=state.get("error"),
+    )
+
+
+@router.get("/{workflow_id}/results", response_model=WorkflowResultResponse)
+async def get_workflow_results(workflow_id: str):
+    """
+    Get the final results of a completed workflow.
+
+    Args:
+        workflow_id: The workflow identifier
+
+    Returns:
+        Workflow results
+    """
+    if workflow_id not in workflow_states:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Workflow '{workflow_id}' not found",
+        )
+
+    state = workflow_states[workflow_id]
+
+    if state["status"] not in ["completed", "failed"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Workflow is still {state['status']}. Results not available yet.",
+        )
+
+    result = state.get("result", {})
+    started_at = state.get("started_at", datetime.now())
+    completed_at = state.get("completed_at", datetime.now())
+    duration = (completed_at - started_at).total_seconds()
+
+    # Build execution trace
+    execution_trace = []
+    if "execution_summary" in result:
+        execution_trace = result.get("execution_summary", {}).get("execution_trace", [])
+
+    # Extract results by agent
+    results_by_agent = {}
+    if "final_result" in result:
+        results_by_agent = result["final_result"]
+    elif "result" in result:
+        results_by_agent = result["result"]
+
+    return WorkflowResultResponse(
+        workflow_id=workflow_id,
+        workflow_type=state["workflow_type"],
+        status=state["status"],
+        results=results_by_agent,
+        summary=result.get("summary", "Workflow execution completed"),
+        execution_trace=execution_trace,
+        started_at=started_at,
+        completed_at=completed_at,
+        total_duration_seconds=duration,
+    )
