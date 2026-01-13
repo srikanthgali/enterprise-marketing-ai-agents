@@ -351,10 +351,24 @@ class OrchestratorAgent(BaseAgent):
             return state
 
         agent = self.agents[agent_id]
+        execution_start = datetime.utcnow()
 
         try:
             # Execute agent with task data
             result = await agent.process(state["task_data"])
+            execution_end = datetime.utcnow()
+            duration = (execution_end - execution_start).total_seconds()
+
+            # Record execution in agent's history
+            execution_record = {
+                "execution_id": str(id(result)),
+                "timestamp": execution_start,
+                "task_type": state.get("task_type", "unknown"),
+                "status": "completed" if result.get("success", True) else "failed",
+                "duration_seconds": duration,
+                "summary": result.get("summary", "Task completed"),
+            }
+            agent.execution_history.append(execution_record)
 
             # Add result message to conversation
             if state["messages"]:

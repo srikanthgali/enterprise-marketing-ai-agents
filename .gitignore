@@ -226,3 +226,6 @@ logs/*.log
 docs/
 docs/*/*/
 docs/*/*/*/
+
+# macOS
+.DS_Store
