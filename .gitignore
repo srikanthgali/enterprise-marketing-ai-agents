@@ -212,6 +212,13 @@ data/*/
 data/*/*/
 data/*/*/*/
 
+# Process ID files
+.pids/
+*.pid
+
+# Log files (keep directory but ignore contents)
+logs/*.log
+
 # Git
 .github/*
 

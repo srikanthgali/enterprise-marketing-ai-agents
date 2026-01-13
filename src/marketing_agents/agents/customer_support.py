@@ -60,30 +60,88 @@ class CustomerSupportAgent(BaseAgent):
         self.register_tool("collect_feedback", self._collect_feedback)
 
     async def process(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Process customer support request."""
+        """Process customer support request with KB search and LLM response."""
         self.status = AgentStatus.PROCESSING
         start_time = datetime.utcnow()
 
         try:
-            request_type = input_data.get("type", "inquiry")
-            self.logger.info(f"Processing support request: {request_type}")
+            # Handle case where input_data might be a string
+            if isinstance(input_data, str):
+                input_data = {
+                    "type": "inquiry",
+                    "message": input_data,
+                }
+            elif not isinstance(input_data, dict):
+                input_data = {"type": "inquiry", "raw_input": str(input_data)}
 
-            result = {"request_type": request_type, "status": "processed"}
+            request_type = input_data.get("type", "inquiry")
+            # Support multiple key formats from different sources
+            message = (
+                input_data.get("message")
+                or input_data.get("inquiry")  # From Gradio UI
+                or input_data.get("raw_input")
+                or ""
+            )
+
+            self.logger.info(f"Processing support request: {request_type}")
+            self.logger.info(f"Query: {message[:100] if message else '(empty)'}...")
+
+            # Step 1: Search knowledge base
+            kb_results_data = await self._search_knowledge_base(query=message, top_k=5)
+            kb_results = kb_results_data.get("results", [])
+            confidence = kb_results_data.get("confidence", 0.0)
+
+            self.logger.info(
+                f"KB search returned {len(kb_results)} results (confidence: {confidence:.2f})"
+            )
+
+            # Step 2: Analyze sentiment
+            sentiment = await self._analyze_sentiment(message)
+
+            # Step 3: Generate response using LLM with KB context
+            response_data = await self._generate_response(
+                query=message, kb_results=kb_results, sentiment=sentiment
+            )
+
+            response_text = response_data.get("response", "No response generated")
+            citations = response_data.get("citations", [])
+            tone = response_data.get("tone", "professional")
+
+            # Format final response
+            result = {
+                "request_type": request_type,
+                "status": "completed",
+                "response": response_text,
+                "citations": citations,
+                "tone": tone,
+                "kb_confidence": confidence,
+                "sources_count": len(kb_results),
+                "sentiment": sentiment.get("label", "neutral"),
+            }
+
+            processing_time = (datetime.utcnow() - start_time).total_seconds()
+            self.logger.info(f"Support request completed in {processing_time:.2f}s")
 
             self.status = AgentStatus.IDLE
             return {
                 "success": True,
-                "response": result,
+                "response": response_text,
+                "details": result,
                 "timestamp": datetime.utcnow().isoformat(),
+                "is_final": True,
+                "summary": f"Answered customer inquiry about: {message[:50]}...",
             }
 
         except Exception as e:
-            self.logger.error(f"Support processing failed: {e}")
+            self.logger.error(f"Support processing failed: {e}", exc_info=True)
             self.status = AgentStatus.ERROR
             return {
                 "success": False,
+                "response": "I apologize, but I encountered an error processing your request. Please try again or contact support.",
                 "error": str(e),
                 "timestamp": datetime.utcnow().isoformat(),
+                "is_final": True,
+                "summary": f"Support processing failed: {str(e)}",
             }
 
     # ==================== Tool Implementation Methods ====================

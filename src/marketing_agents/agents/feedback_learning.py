@@ -81,6 +81,15 @@ class FeedbackLearningAgent(BaseAgent):
         start_time = datetime.utcnow()
 
         try:
+            # Handle case where input_data might be a string
+            if isinstance(input_data, str):
+                input_data = {
+                    "type": "analyze_feedback",
+                    "message": input_data,
+                }
+            elif not isinstance(input_data, dict):
+                input_data = {"type": "analyze_feedback", "raw_input": str(input_data)}
+
             request_type = input_data.get("type", "analyze_feedback")
             self.logger.info(f"Processing learning request: {request_type}")
 
@@ -97,6 +106,8 @@ class FeedbackLearningAgent(BaseAgent):
                 "success": True,
                 "learning_results": result,
                 "timestamp": datetime.utcnow().isoformat(),
+                "is_final": True,
+                "summary": f"Learning analysis completed: {request_type}",
             }
 
         except Exception as e:
@@ -106,6 +117,8 @@ class FeedbackLearningAgent(BaseAgent):
                 "success": False,
                 "error": str(e),
                 "timestamp": datetime.utcnow().isoformat(),
+                "is_final": True,
+                "summary": f"Learning processing failed: {str(e)}",
             }
 
     def _aggregate_feedback(

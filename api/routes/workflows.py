@@ -289,6 +289,70 @@ async def generate_analytics_report(
     )
 
 
+@router.get("", response_model=Dict[str, Any])
+async def list_workflows(
+    status: str = None,
+    workflow_type: str = None,
+    limit: int = 50,
+    offset: int = 0,
+):
+    """
+    List all workflows with optional filtering.
+
+    Args:
+        status: Filter by workflow status (pending, in_progress, completed, failed)
+        workflow_type: Filter by workflow type (campaign_launch, customer_support, analytics)
+        limit: Maximum number of workflows to return
+        offset: Number of workflows to skip
+
+    Returns:
+        List of workflows with metadata
+    """
+    # Filter workflows
+    filtered_workflows = []
+
+    for workflow_id, state in workflow_states.items():
+        # Apply status filter
+        if status and state.get("status") != status:
+            continue
+
+        # Apply workflow_type filter
+        if workflow_type and state.get("workflow_type") != workflow_type:
+            continue
+
+        # Build workflow summary
+        workflow_summary = {
+            "workflow_id": workflow_id,
+            "workflow_type": state.get("workflow_type"),
+            "status": state.get("status"),
+            "current_agent": state.get("current_agent"),
+            "progress": state.get("progress", 0.0),
+            "started_at": state.get("started_at"),
+            "completed_at": state.get("completed_at"),
+            "estimated_completion": state.get("estimated_completion"),
+            "agents_executed": state.get("agents_executed", []),
+            "error": state.get("error"),
+        }
+
+        filtered_workflows.append(workflow_summary)
+
+    # Sort by started_at (most recent first)
+    filtered_workflows.sort(
+        key=lambda x: x.get("started_at") or datetime.min, reverse=True
+    )
+
+    # Apply pagination
+    total_count = len(filtered_workflows)
+    paginated_workflows = filtered_workflows[offset : offset + limit]
+
+    return {
+        "workflows": paginated_workflows,
+        "total": total_count,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
 @router.get("/{workflow_id}", response_model=WorkflowStatusResponse)
 async def get_workflow_status(workflow_id: str):
     """
@@ -354,22 +418,37 @@ async def get_workflow_results(workflow_id: str):
 
     # Build execution trace
     execution_trace = []
-    if "execution_summary" in result:
+    if result and "execution_summary" in result:
         execution_trace = result.get("execution_summary", {}).get("execution_trace", [])
 
     # Extract results by agent
     results_by_agent = {}
-    if "final_result" in result:
-        results_by_agent = result["final_result"]
-    elif "result" in result:
-        results_by_agent = result["result"]
+    if result:
+        if "final_result" in result:
+            results_by_agent = result["final_result"]
+        elif "result" in result:
+            results_by_agent = result["result"]
+
+    # Ensure results is a dictionary (never None)
+    if results_by_agent is None or not isinstance(results_by_agent, dict):
+        results_by_agent = {}
+
+    # For failed workflows, include error information
+    summary = "Workflow execution completed"
+    if state["status"] == "failed":
+        error_msg = state.get("error", "Unknown error")
+        summary = f"Workflow failed: {error_msg}"
+        if not results_by_agent:
+            results_by_agent = {"error": error_msg}
+    elif result:
+        summary = result.get("summary", summary)
 
     return WorkflowResultResponse(
         workflow_id=workflow_id,
         workflow_type=state["workflow_type"],
         status=state["status"],
         results=results_by_agent,
-        summary=result.get("summary", "Workflow execution completed"),
+        summary=summary,
         execution_trace=execution_trace,
         started_at=started_at,
         completed_at=completed_at,

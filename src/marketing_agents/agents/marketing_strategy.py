@@ -9,6 +9,7 @@ from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
 import logging
 import json
+import re
 
 from ..core.base_agent import BaseAgent, AgentStatus
 from ..tools.web_search import WebSearchTool
@@ -48,6 +49,27 @@ class MarketingStrategyAgent(BaseAgent):
         # Strategy templates and best practices
         self.strategy_templates = {}
 
+    def _extract_json_from_response(self, content: str) -> str:
+        """Extract JSON from LLM response, handling markdown code blocks.
+
+        Args:
+            content: Raw LLM response content
+
+        Returns:
+            Cleaned JSON string
+        """
+        # Remove markdown code block markers if present
+        content = content.strip()
+
+        # Pattern to match ```json ... ``` or ``` ... ```
+        json_block_pattern = r"```(?:json)?\s*\n?(.*?)\n?```"
+        match = re.search(json_block_pattern, content, re.DOTALL)
+
+        if match:
+            return match.group(1).strip()
+
+        return content
+
         # Market intelligence cache
         self.market_intelligence = {}
 
@@ -80,6 +102,18 @@ class MarketingStrategyAgent(BaseAgent):
         start_time = datetime.utcnow()
 
         try:
+            # Handle case where input_data might be a string or improperly formatted
+            if isinstance(input_data, str):
+                # If input is a string, wrap it in a dict with a default type
+                input_data = {
+                    "type": "campaign_strategy",
+                    "message": input_data,
+                    "objectives": ["Generate marketing strategy based on user request"],
+                }
+            elif not isinstance(input_data, dict):
+                # If not a dict, convert to dict
+                input_data = {"type": "campaign_strategy", "raw_input": str(input_data)}
+
             request_type = input_data.get("type", "campaign_strategy")
 
             self.logger.info(f"Processing strategy request: {request_type}")
@@ -114,6 +148,8 @@ class MarketingStrategyAgent(BaseAgent):
                 "success": True,
                 "strategy": result,
                 "timestamp": datetime.utcnow().isoformat(),
+                "is_final": True,  # Mark result as final to complete workflow
+                "summary": f"Marketing strategy generated for {request_type}",
             }
 
         except Exception as e:
@@ -124,6 +160,8 @@ class MarketingStrategyAgent(BaseAgent):
                 "success": False,
                 "error": str(e),
                 "timestamp": datetime.utcnow().isoformat(),
+                "is_final": True,  # Mark as final even on error to stop loop
+                "summary": f"Strategy processing failed: {str(e)}",
             }
 
     async def _create_campaign_strategy(
@@ -134,6 +172,9 @@ class MarketingStrategyAgent(BaseAgent):
         # Extract requirements
         objectives = input_data.get("objectives", [])
         target_audience = input_data.get("target_audience", {})
+        # Ensure target_audience is a dict
+        if not isinstance(target_audience, dict):
+            target_audience = {}
         budget = input_data.get("budget", 0)
         timeline = input_data.get("timeline", "3 months")
         industry = input_data.get("industry", "general")
@@ -394,7 +435,8 @@ Provide a structured analysis in JSON format:
 
                 try:
                     # Parse JSON response
-                    analysis = json.loads(response.content)
+                    json_content = self._extract_json_from_response(response.content)
+                    analysis = json.loads(json_content)
 
                     competitor_profile.update(
                         {
@@ -511,7 +553,8 @@ Create 2-3 audience segments with detailed personas. Provide response in JSON fo
 
             try:
                 # Parse LLM response
-                segmentation = json.loads(response.content)
+                json_content = self._extract_json_from_response(response.content)
+                segmentation = json.loads(json_content)
 
                 # Add metadata
                 segmentation["timestamp"] = datetime.utcnow().isoformat()
@@ -595,7 +638,8 @@ Generate exactly {duration_weeks} calendar entries, distributed across the theme
             response = await self.llm.ainvoke(prompt)
 
             try:
-                strategy = json.loads(response.content)
+                json_content = self._extract_json_from_response(response.content)
+                strategy = json.loads(json_content)
 
                 # Ensure we have the right number of weeks
                 if len(strategy.get("calendar", [])) < duration_weeks:
@@ -699,7 +743,8 @@ Ensure percentages sum to 100."""
             response = await self.llm.ainvoke(prompt)
 
             try:
-                optimization = json.loads(response.content)
+                json_content = self._extract_json_from_response(response.content)
+                optimization = json.loads(json_content)
 
                 # Calculate actual amounts based on percentages
                 allocation = optimization.get("allocation", {})

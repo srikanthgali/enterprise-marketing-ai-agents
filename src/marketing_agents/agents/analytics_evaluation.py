@@ -84,6 +84,18 @@ class AnalyticsEvaluationAgent(BaseAgent):
         start_time = datetime.utcnow()
 
         try:
+            # Handle case where input_data might be a string
+            if isinstance(input_data, str):
+                input_data = {
+                    "type": "performance_report",
+                    "message": input_data,
+                }
+            elif not isinstance(input_data, dict):
+                input_data = {
+                    "type": "performance_report",
+                    "raw_input": str(input_data),
+                }
+
             request_type = input_data.get("type", "performance_report")
             self.logger.info(f"Processing analytics request: {request_type}")
 
@@ -115,6 +127,8 @@ class AnalyticsEvaluationAgent(BaseAgent):
                 "success": True,
                 "analytics": result,
                 "timestamp": datetime.utcnow().isoformat(),
+                "is_final": True,
+                "summary": f"Analytics report generated: {request_type}",
             }
 
         except Exception as e:
@@ -124,6 +138,8 @@ class AnalyticsEvaluationAgent(BaseAgent):
                 "success": False,
                 "error": str(e),
                 "timestamp": datetime.utcnow().isoformat(),
+                "is_final": True,
+                "summary": f"Analytics processing failed: {str(e)}",
             }
 
     async def _handle_calculate_metrics(

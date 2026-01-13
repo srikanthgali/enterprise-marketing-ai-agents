@@ -228,9 +228,10 @@ class WorkflowGraphBuilder:
 
         task_type = state["task_type"]
 
-        # Marketing strategy tasks
+        # Marketing strategy tasks (including campaign launch)
         if task_type in [
             "campaign_planning",
+            "campaign_launch",
             "content_strategy",
             "brand_positioning",
             "marketing_strategy",
@@ -241,6 +242,7 @@ class WorkflowGraphBuilder:
         # Customer support tasks
         elif task_type in [
             "customer_inquiry",
+            "customer_support_request",
             "support_ticket",
             "issue_resolution",
             "customer_support",

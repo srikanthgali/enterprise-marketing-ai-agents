@@ -20,6 +20,8 @@ fastapi:
       - "http://localhost"
       - "http://localhost:3000"
       - "http://localhost:8080"
+      - "http://localhost:8501"  # Streamlit default port
+      - "http://localhost:7860"  # Gradio default port
       - "http://127.0.0.1"
     allow_credentials: true
     allow_methods: ["*"]
@@ -300,6 +302,49 @@ monitoring:
       - "/api/v1/health"
     alert_on_failure: true
 
+# Streamlit Dashboard Configuration
+streamlit:
+  server:
+    port: 8501
+    address: "localhost"
+    enableCORS: false
+    enableXsrfProtection: true
+    maxUploadSize: 200
+
+  theme:
+    primaryColor: "#4CAF50"
+    backgroundColor: "#FFFFFF"
+    secondaryBackgroundColor: "#F0F2F6"
+    textColor: "#262730"
+    font: "sans serif"
+
+  dashboard:
+    title: "Marketing AI Agents Dashboard"
+    icon: "🤖"
+    layout: "wide"
+    auto_refresh_interval: 5  # seconds
+    max_retries: 3
+    request_timeout: 10  # seconds
+
+    # Data refresh intervals (seconds)
+    cache_ttl:
+      agents: 30
+      workflows: 10
+      metrics: 60
+      analytics: 300
+
+    # Display limits
+    limits:
+      activity_log: 20
+      workflow_history: 50
+      agent_history: 100
+      analytics_days: 30
+
+    # Export settings
+    export:
+      formats: ["csv", "json", "excel"]
+      max_rows: 10000
+
 # Environment-Specific Overrides
 environments:
   development:
@@ -313,6 +358,9 @@ environments:
       enabled: false
     error_handling:
       include_details: true
+    streamlit:
+      server:
+        enableCORS: true
 
   staging:
     fastapi:
@@ -340,3 +388,38 @@ environments:
     monitoring:
       request_logging:
         include_body: false
+
+# Gradio UI Configuration
+gradio:
+  server:
+    host: "0.0.0.0"
+    port: 7860
+    share: false  # Set to true for public sharing
+    max_threads: 40
+
+  interface:
+    title: "Enterprise Marketing AI Agents"
+    description: "Conversational interface for multi-agent marketing workflows"
+    theme: "soft"
+    show_api: false
+    show_error: true
+
+  chat:
+    max_history: 100
+    typing_indicator: true
+    stream_responses: true
+    poll_interval: 2  # seconds
+    max_poll_attempts: 60
+
+  export:
+    enabled: true
+    format: "json"  # "json", "markdown", "txt"
+    directory: "data/conversations"
+
+  examples:
+    - "Plan a campaign for our new payment API product"
+    - "How does Stripe handle subscription billing?"
+    - "Analyze our campaign performance from last month"
+    - "What improvements can we make to agent performance?"
+    - "Create a content strategy for developer outreach"
+

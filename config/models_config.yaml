@@ -3,13 +3,30 @@
 
 # OpenAI Models
 openai:
-  # Chat/Completion Models
+  # Chat/Completion Models (Optimized for Cost)
+  gpt-4o-mini:
+    temperature: 0.6
+    max_tokens: 2048
+    top_p: 1.0
+    frequency_penalty: 0.0
+    presence_penalty: 0.0
+    use_case: "Most cost-effective for portfolio projects"
+
+  gpt-3.5-turbo:
+    temperature: 0.6
+    max_tokens: 2048
+    top_p: 1.0
+    frequency_penalty: 0.0
+    presence_penalty: 0.0
+    use_case: "Balanced cost and performance"
+
   gpt-4-turbo:
     temperature: 0.7
     max_tokens: 4096
     top_p: 1.0
     frequency_penalty: 0.0
     presence_penalty: 0.0
+    use_case: "Higher quality (keep for optional upgrades)"
 
   gpt-4:
     temperature: 0.7
@@ -17,13 +34,7 @@ openai:
     top_p: 1.0
     frequency_penalty: 0.0
     presence_penalty: 0.0
-
-  gpt-3.5-turbo:
-    temperature: 0.7
-    max_tokens: 4096
-    top_p: 1.0
-    frequency_penalty: 0.0
-    presence_penalty: 0.0
+    use_case: "Legacy, most expensive"
 
   # Embedding Models
   text-embedding-3-small:
@@ -61,10 +72,11 @@ anthropic:
     temperature: 0.7
     max_tokens: 4096
 
-# Default Model Settings
+# Default Model Settings (Optimized for Portfolio/Cost)
 defaults:
-  chat_model: "gpt-4-turbo"
-  embedding_model: "text-embedding-3-small"
-  temperature: 0.7
+  chat_model: "gpt-4o-mini"  # Most cost-effective option
+  embedding_model: "text-embedding-3-small"  # Already cost-optimized
+  temperature: 0.6  # Slightly lower for consistency
   max_retries: 3
   timeout: 60
+  # Note: gpt-4o-mini is ~15-60x cheaper than GPT-4 models

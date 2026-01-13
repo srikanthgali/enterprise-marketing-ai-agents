@@ -49,6 +49,10 @@ class APISettings(BaseSettings):
     openai_timeout: int = Field(default=60, env="OPENAI_TIMEOUT")
     openai_max_retries: int = Field(default=3, env="OPENAI_MAX_RETRIES")
 
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", case_sensitive=False, extra="allow"
+    )
+
 
 class RedisSettings(BaseSettings):
     """Redis configuration."""

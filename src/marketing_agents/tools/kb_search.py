@@ -45,7 +45,7 @@ class KnowledgeBaseSearchTool:
             self.vector_store_path = (
                 self.settings.base_dir
                 / self.settings.vector_store.persist_directory
-                / "stripe_docs"
+                / "stripe_knowledge_base"
             )
 
         self.vector_store: Optional[FAISS] = None
