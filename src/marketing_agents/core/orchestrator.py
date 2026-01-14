@@ -261,8 +261,11 @@ class OrchestratorAgent(BaseAgent):
         self.health_metrics["workflows_running"] = len(self.active_workflows)
 
         try:
-            # Execute workflow through LangGraph
-            final_state = await self.workflow_graph.ainvoke(initial_state)
+            # Execute workflow through LangGraph with increased recursion limit
+            # to handle complex multi-agent handoff scenarios
+            final_state = await self.workflow_graph.ainvoke(
+                initial_state, config={"recursion_limit": 50}
+            )
 
             # Update workflow tracking
             self.active_workflows[workflow_id]["status"] = "completed"
@@ -287,7 +290,20 @@ class OrchestratorAgent(BaseAgent):
         except Exception as e:
             self.logger.error(f"Workflow {workflow_id} failed: {e}", exc_info=True)
             self.active_workflows[workflow_id]["status"] = "failed"
-            raise
+            self.active_workflows[workflow_id]["error"] = str(e)
+
+            # Return error information instead of raising
+            return {
+                "workflow_id": workflow_id,
+                "final_result": None,
+                "execution_summary": {
+                    "status": "failed",
+                    "error": str(e),
+                    "agents_executed": [],
+                    "total_steps": 0,
+                },
+                "error": str(e),
+            }
 
         finally:
             # Clean up completed workflow
@@ -350,8 +366,18 @@ class OrchestratorAgent(BaseAgent):
             state["next_action"] = "error"
             return state
 
+        # Record agent start in workflow state
+        from .state import record_agent_start
+
+        state = record_agent_start(state, agent_id)
+
         agent = self.agents[agent_id]
         execution_start = datetime.utcnow()
+
+        # Check if this agent was the target of a handoff
+        was_handoff_target = (
+            state.get("handoff_required") and state.get("target_agent") == agent_id
+        )
 
         try:
             # Execute agent with task data
@@ -386,6 +412,62 @@ class OrchestratorAgent(BaseAgent):
             # Update state with results
             updated_state = update_state_with_result(state, agent_id, result)
             updated_state["messages"] = messages
+
+            # Prefer explicit handoff signals returned by the agent itself.
+            # Several agents (e.g., customer_support) attach `handoff_required` and
+            # `target_agent` directly to their response payload.
+            if (
+                isinstance(result, dict)
+                and result.get("handoff_required")
+                and result.get("target_agent")
+            ):
+                to_agent = str(result["target_agent"])
+                reason = str(result.get("handoff_reason") or "handoff_requested")
+                context = result.get("context")
+                if not isinstance(context, dict):
+                    context = result
+
+                self.logger.info(
+                    f"Handoff requested from {agent_id} to {to_agent}: {reason} (explicit)"
+                )
+
+                await self.handoff_manager.request_handoff(
+                    from_agent=agent_id,
+                    to_agent=to_agent,
+                    reason=reason,
+                    context=context,
+                )
+
+                handoff_state = set_handoff(updated_state, to_agent, reason)
+
+                # Update task_data for the target agent using context from the source agent
+                # This ensures the target agent receives the handoff context, not the original task data
+                if context and isinstance(context, dict):
+                    # We create a new task_data dictionary merging original data with context
+                    # Context takes precedence
+                    new_task_data = updated_state.get("task_data", {}).copy()
+                    new_task_data.update(context)
+                    handoff_state["task_data"] = new_task_data
+
+                    # Update task_type if provided in context
+                    if "type" in context:
+                        handoff_state["task_type"] = context["type"]
+
+                self.logger.info(
+                    f"Created handoff state: next_action={handoff_state.get('next_action')}, "
+                    f"handoff_required={handoff_state.get('handoff_required')}, "
+                    f"target_agent={handoff_state.get('target_agent')}"
+                )
+                return handoff_state
+
+            # If this agent was the target of a handoff, clear the handoff flags NOW
+            # (after state update, not before)
+            if was_handoff_target:
+                self.logger.info(
+                    f"Clearing handoff flags - {agent_id} processed handed-off task"
+                )
+                updated_state["handoff_required"] = False
+                updated_state["target_agent"] = None
 
             # Check for handoffs
             handoff = agent.should_handoff(result)
@@ -423,9 +505,12 @@ class OrchestratorAgent(BaseAgent):
             error_msg = f"Error executing {agent_id}: {str(e)}"
             self.logger.error(error_msg, exc_info=True)
 
-            state["error"] = error_msg
-            state["next_action"] = "error"
-            return state
+            # Create a proper error state update
+            error_state = dict(state)
+            error_state["error"] = error_msg
+            error_state["next_action"] = "error"
+            error_state["current_agent"] = agent_id
+            return error_state
 
     async def _get_agent_status(self, agent_id: Optional[str] = None) -> Dict:
         """Get status of specific agent or all agents."""

@@ -226,6 +226,38 @@ class WorkflowGraphBuilder:
             self.logger.info("Workflow complete from orchestrator")
             return "complete"
 
+        # DEBUG: Log full state for troubleshooting
+        self.logger.info(
+            f"Orchestrator routing - next_action={state.get('next_action')}, "
+            f"handoff_required={state.get('handoff_required')}, "
+            f"target_agent={state.get('target_agent')}, "
+            f"task_type={state.get('task_type')}"
+        )
+
+        # Check if there's a pending handoff - prioritize this over task_type
+        # Look for either next_action="handoff" OR handoff_required flag
+        if (
+            state.get("next_action") == "handoff" or state.get("handoff_required")
+        ) and state.get("target_agent"):
+            target = state["target_agent"]
+            self.logger.info(
+                f"Orchestrator detected pending handoff: target={target}, "
+                f"next_action={state.get('next_action')}, handoff_required={state.get('handoff_required')}"
+            )
+            valid_targets = [
+                "marketing_strategy",
+                "customer_support",
+                "analytics_evaluation",
+                "feedback_learning",
+            ]
+            if target in valid_targets:
+                self.logger.info(f"✓ Routing to {target} based on handoff request")
+                return target  # type: ignore
+            else:
+                self.logger.warning(
+                    f"Invalid handoff target: {target}, falling back to task_type routing"
+                )
+
         task_type = state["task_type"]
 
         # Marketing strategy tasks (including campaign launch)
@@ -256,6 +288,8 @@ class WorkflowGraphBuilder:
             "metrics_evaluation",
             "reporting",
             "analytics",
+            "analytics_report",
+            "generate_report",
         ]:
             self.logger.info(f"Routing to analytics_evaluation for task: {task_type}")
             return "analytics_evaluation"
@@ -512,8 +546,14 @@ class WorkflowGraphBuilder:
             # Add conditional edges for routing
             self._add_conditional_edges()
 
-            # Compile the graph
-            compiled_graph = self.graph.compile()
+            # Compile the graph with increased recursion limit
+            # Default is 25, increasing to 50 to handle complex workflows
+            compiled_graph = self.graph.compile(
+                checkpointer=None,
+                # Increase recursion limit to prevent premature termination
+                # in complex multi-agent handoff scenarios
+                debug=False,
+            )
 
             self.logger.info("Workflow graph compiled successfully")
             return compiled_graph

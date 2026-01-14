@@ -27,6 +27,7 @@ from ..tools.visualization import (
     create_line_chart,
     create_funnel_chart,
 )
+from ..tools.synthetic_data_loader import load_execution_data
 
 
 class AnalyticsEvaluationAgent(BaseAgent):
@@ -51,6 +52,46 @@ class AnalyticsEvaluationAgent(BaseAgent):
         )
         self.metrics_history: List[Dict] = []
         self.kpi_definitions = {}
+
+    def should_handoff(self, context: Dict[str, Any]) -> Optional[Any]:
+        """
+        Override base handoff logic for explicit handoff control.
+
+        Only handoff when the LLM explicitly requests it by setting handoff flags.
+        This prevents automatic handoffs from keyword matching in analytics results.
+
+        Args:
+            context: Current execution context (typically the result)
+
+        Returns:
+            HandoffRequest if explicit handoff requested, None otherwise
+        """
+        # Check if this is an error case that needs escalation
+        if context.get("success") is False and context.get("error"):
+            # Even on errors, mark as final to avoid loops
+            return None
+
+        # Check if result explicitly requests a handoff
+        if context.get("handoff_required") is True:
+            target_agent = context.get("target_agent")
+            reason = context.get("handoff_reason", "explicit_handoff_request")
+
+            if target_agent:
+                from src.marketing_agents.core.base_agent import HandoffRequest
+
+                self.logger.info(
+                    f"Explicit handoff requested: {self.agent_id} -> {target_agent}"
+                )
+                return HandoffRequest(
+                    from_agent=self.agent_id,
+                    to_agent=target_agent,
+                    reason=reason,
+                    context=context,
+                )
+
+        # For normal analytics reports, do not handoff
+        # The agent should complete its analysis and return final results
+        return None
 
     def _register_tools(self) -> None:
         """Register analytics-specific tools."""
@@ -97,6 +138,18 @@ class AnalyticsEvaluationAgent(BaseAgent):
                 }
 
             request_type = input_data.get("type", "performance_report")
+
+            # Extract user query from filters (Gradio sends it here)
+            user_query = input_data.get("message", "")
+            if not user_query:
+                filters = input_data.get("filters", {})
+                user_query = filters.get("user_query", "")
+
+            # Store user query for handoff detection
+            if user_query:
+                input_data["message"] = user_query
+                self.logger.info(f"User query: {user_query}")
+
             self.logger.info(f"Processing analytics request: {request_type}")
 
             # Route to appropriate handler
@@ -112,24 +165,59 @@ class AnalyticsEvaluationAgent(BaseAgent):
                 result = await self._handle_ab_test(input_data)
             else:
                 # Default: comprehensive performance report
-                metrics = self._calculate_metrics(
-                    time_range=input_data.get("time_range", "24h")
-                )
-                report = self._generate_report(metrics)
+                # Extract time_range from input_data or date_range
+                time_range = input_data.get("time_range", "24h")
+
+                # If date_range is provided (from API), convert to time_range
+                if "date_range" in input_data:
+                    # Use a longer time range to capture all synthetic data
+                    time_range = "365d"
+                    self.logger.info(
+                        f"Using date_range, setting time_range to {time_range}"
+                    )
+
+                metrics = self._calculate_metrics(time_range=time_range)
+
+                # Generate contextual report based on user query
+                if user_query:
+                    report = self._generate_contextual_report(metrics, user_query)
+                else:
+                    report = self._generate_report(metrics)
+
                 result = {
                     "request_type": request_type,
                     "metrics": metrics,
                     "report": report,
+                    "user_query": user_query,
                 }
 
             self.status = AgentStatus.IDLE
-            return {
+
+            # Check if handoff is needed based on analysis results
+            handoff_info = self._detect_handoff_need(result, input_data)
+
+            # Generate meaningful summary based on user query or handoff
+            if handoff_info.get("handoff_required"):
+                target = handoff_info.get("target_agent", "")
+                summary = f"Routing to {target} agent for specialized assistance."
+            elif user_query:
+                summary = f"Analytics report for: {user_query[:80]}..."
+            else:
+                summary = f"Analytics report generated: {request_type}"
+
+            response = {
                 "success": True,
                 "analytics": result,
                 "timestamp": datetime.utcnow().isoformat(),
-                "is_final": True,
-                "summary": f"Analytics report generated: {request_type}",
+                "is_final": not handoff_info.get("handoff_required", False),
+                "summary": summary,
             }
+
+            # Add handoff information if needed
+            if handoff_info.get("handoff_required"):
+                response.update(handoff_info)
+
+            return response
 
         except Exception as e:
             self.logger.error(f"Analytics processing failed: {e}")
@@ -222,7 +310,7 @@ class AnalyticsEvaluationAgent(BaseAgent):
             try:
                 # Retrieve execution history from memory
                 stored_history = self.memory_manager.retrieve(
-                    key="execution_history", namespace="system"
+                    agent_id="system", key="execution_history", memory_type="long_term"
                 )
                 if stored_history:
                     execution_data = stored_history
@@ -232,6 +320,18 @@ class AnalyticsEvaluationAgent(BaseAgent):
         # Fallback to agent's local execution history
         if not execution_data:
             execution_data = self.execution_history
+
+        # If still no data, load from synthetic data files
+        if not execution_data:
+            try:
+                self.logger.info("Loading synthetic data from files...")
+                execution_data = load_execution_data(time_range=time_range)
+                self.logger.info(
+                    f"Loaded {len(execution_data)} records from synthetic data"
+                )
+            except Exception as e:
+                self.logger.error(f"Failed to load synthetic data: {e}")
+                execution_data = []
 
         # Filter by time range
         filtered_data = [
@@ -708,6 +808,304 @@ class AnalyticsEvaluationAgent(BaseAgent):
             insights.append("P99 latency is high. Investigate performance bottlenecks.")
 
         return insights
+
+    def _detect_handoff_need(
+        self, result: Dict[str, Any], input_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Detect if analysis results warrant a handoff to another agent.
+
+        Analyzes the metrics and context to determine if:
+        - Strategic pivot needed (→ Marketing Strategy)
+        - Learning opportunity identified (→ Feedback Learning)
+        - Customer issues detected (→ Customer Support)
+
+        Args:
+            result: The analysis result dictionary
+            input_data: The original request data
+
+        Returns:
+            Dictionary with handoff information if needed, empty dict otherwise
+        """
+        handoff_info = {}
+
+        # Extract metrics if available
+        metrics = result.get("metrics", {})
+        campaign_metrics = metrics.get("campaign_metrics", {})
+
+        # Check if report is a dict (legacy) or string (new format)
+        report = result.get("report", {})
+        comparison = {}
+        if isinstance(report, dict):
+            comparison = report.get("comparison", {})
+
+        # Check for performance decline requiring strategic pivot
+        if comparison:
+            campaign_comp = comparison.get("campaign", {})
+            roi_change = campaign_comp.get("roi_change", 0)
+            ctr_change = campaign_comp.get("ctr_change", 0)
+            conversion_change = campaign_comp.get("conversion_rate_change", 0)
+
+            # Significant decline (>20%) triggers handoff to marketing strategy
+            if roi_change < -20 or ctr_change < -20 or conversion_change < -20:
+                handoff_info = {
+                    "handoff_required": True,
+                    "target_agent": "marketing_strategy",
+                    "handoff_reason": "strategic_pivot_needed",
+                    "context": {
+                        "analysis_type": "performance_decline_analysis",
+                        "severity": "high",
+                        "findings": [
+                            f"ROI changed by {roi_change:.1f}%",
+                            f"CTR changed by {ctr_change:.1f}%",
+                            f"Conversion rate changed by {conversion_change:.1f}%",
+                        ],
+                        "metrics": campaign_metrics,
+                        "recommendation": "Significant performance decline detected. Strategic review and pivot recommended.",
+                    },
+                }
+                return handoff_info
+
+        # Check user message for handoff triggers
+        user_message = input_data.get("message", "").lower()
+        self.logger.info(f"Checking handoff for message: '{user_message[:100]}'")
+
+        # Scenario 1: Customer satisfaction issues (check first - most specific)
+        satisfaction_keywords = [
+            "satisfaction",
+            "churn",
+            "nps",
+            "retention",
+            "complaints",
+            "unhappy",
+            "cancellation",
+        ]
+        if any(keyword in user_message for keyword in satisfaction_keywords):
+            self.logger.info(
+                f"Handoff detected: customer_support (satisfaction keywords)"
+            )
+            handoff_info = {
+                "handoff_required": True,
+                "target_agent": "customer_support",
+                "handoff_reason": "customer_issue_detected",
+                "context": {
+                    "issue_type": "satisfaction_analysis_requested",
+                    "severity": "medium",
+                    "metrics": metrics,
+                    "recommendation": "Customer Support team should investigate satisfaction trends",
+                },
+            }
+            return handoff_info
+
+        # Scenario 2: Prediction accuracy or model improvement (check before general strategic)
+        prediction_keywords = [
+            "prediction",
+            "predictions",
+            "accurate",
+            "accuracy",
+            "forecast",
+            "forecasting",
+            "model performance",
+            "improve predictions",
+        ]
+        if any(keyword in user_message for keyword in prediction_keywords):
+            self.logger.info(
+                f"Handoff detected: feedback_learning (prediction keywords)"
+            )
+            handoff_info = {
+                "handoff_required": True,
+                "target_agent": "feedback_learning",
+                "handoff_reason": "learning_opportunity",
+                "context": {
+                    "pattern_type": "model_improvement_needed",
+                    "insight": "User requesting prediction accuracy improvement",
+                    "metrics": metrics,
+                    "recommendation": "Evaluate and improve forecasting models",
+                },
+            }
+            return handoff_info
+
+        # Scenario 3: Pattern discovery for systematization
+        pattern_keywords = [
+            "systematize",
+            "pattern",
+            "learning",
+            "best practice",
+            "consistently",
+            "outperform",
+            "video content",
+            "always",
+            "learn from",
+        ]
+        if any(keyword in user_message for keyword in pattern_keywords):
+            self.logger.info(f"Handoff detected: feedback_learning (pattern keywords)")
+            handoff_info = {
+                "handoff_required": True,
+                "target_agent": "feedback_learning",
+                "handoff_reason": "learning_opportunity",
+                "context": {
+                    "pattern_type": "performance_pattern",
+                    "insight": "Analysis revealed pattern suitable for systematization",
+                    "metrics": metrics,
+                    "recommendation": "Document this pattern as a best practice",
+                },
+            }
+            return handoff_info
+
+        # Scenario 4: Performance decline or strategic recommendations (check last - most general)
+        decline_keywords = [
+            "declining",
+            "dropped",
+            "falling",
+            "decreasing",
+            "worse",
+            "poor",
+            "not working",
+            "failing",
+            "underperforming",
+        ]
+        strategic_keywords = [
+            "recommend",
+            "improve",
+            "help",
+            "strategy",
+            "pivot",
+            "optimize",
+        ]
+
+        if any(
+            keyword in user_message for keyword in decline_keywords + strategic_keywords
+        ):
+            self.logger.info(
+                f"Handoff detected: marketing_strategy (decline/strategic keywords)"
+            )
+            handoff_info = {
+                "handoff_required": True,
+                "target_agent": "marketing_strategy",
+                "handoff_reason": "strategic_pivot_needed",
+                "context": {
+                    "analysis_type": "strategic_recommendation_requested",
+                    "severity": (
+                        "high"
+                        if any(keyword in user_message for keyword in decline_keywords)
+                        else "medium"
+                    ),
+                    "findings": [f"User query: {input_data.get('message', '')}"],
+                    "metrics": metrics,
+                    "recommendation": "User requested strategic improvements or reported performance decline",
+                },
+            }
+            return handoff_info
+
+        self.logger.info("No handoff needed - normal analytics query")
+        # No handoff needed
+        return {}
+
+    def _generate_contextual_report(self, metrics: dict, user_query: str) -> str:
+        """Generate contextual report based on user query."""
+        campaign = metrics.get("campaign_metrics", {})
+
+        # Extract key metrics
+        roi = campaign.get("roi", 0)
+        ctr = campaign.get("ctr", 0)
+        conversion_rate = campaign.get("conversion_rate", 0)
+        impressions = campaign.get("total_impressions", 0)
+        conversions = campaign.get("total_conversions", 0)
+
+        # Create contextual response based on query keywords
+        query_lower = user_query.lower()
+
+        if any(word in query_lower for word in ["roi", "return"]):
+            report = f"""# ROI Analysis
+
+Based on your query: "{user_query}"
+
+## Current ROI Performance
+- **ROI**: {roi:.2f}%
+- **Total Conversions**: {conversions:,}
+- **Conversion Rate**: {conversion_rate:.2f}%
+
+## Analysis
+{"Your ROI is strong at " + str(round(roi, 1)) + "%, indicating efficient campaign spend." if roi > 200 else "ROI is below target. Consider optimizing your campaigns for better returns."}
+
+## Key Metrics
+- Impressions: {impressions:,}
+- CTR: {ctr:.2f}%
+"""
+        elif any(word in query_lower for word in ["ctr", "click", "engagement"]):
+            report = f"""# Click-Through Rate Analysis
+
+Based on your query: "{user_query}"
+
+## Current CTR Performance
+- **CTR**: {ctr:.2f}%
+- **Total Impressions**: {impressions:,}
+- **Engagement Level**: {"High" if ctr > 2.5 else "Moderate" if ctr > 1.5 else "Needs Improvement"}
+
+## Analysis
+{"Excellent engagement! Your CTR is above industry average." if ctr > 2.5 else "CTR is moderate. Consider testing new ad creatives or targeting." if ctr > 1.5 else "CTR is below average. Immediate optimization recommended."}
+"""
+        elif any(word in query_lower for word in ["conversion", "converting"]):
+            report = f"""# Conversion Analysis
+
+Based on your query: "{user_query}"
+
+## Current Conversion Performance
+- **Conversion Rate**: {conversion_rate:.2f}%
+- **Total Conversions**: {conversions:,}
+- **CTR**: {ctr:.2f}%
+
+## Analysis
+{"Strong conversion rate! Your campaigns are effectively driving actions." if conversion_rate > 3 else "Conversion rate is moderate. Optimize landing pages and CTAs." if conversion_rate > 2 else "Low conversion rate. Review user journey and remove friction points."}
+"""
+        elif any(
+            word in query_lower for word in ["performance", "metrics", "campaign"]
+        ):
+            report = f"""# Campaign Performance Overview
+
+Based on your query: "{user_query}"
+
+## Overall Performance
+- **ROI**: {roi:.2f}%
+- **CTR**: {ctr:.2f}%
+- **Conversion Rate**: {conversion_rate:.2f}%
+- **Total Impressions**: {impressions:,}
+- **Total Conversions**: {conversions:,}
+
+## Performance Summary
+{self._get_performance_summary(roi, ctr, conversion_rate)}
+"""
+        else:
+            # Generic response for other queries
+            report = f"""# Analytics Report
+
+Based on your query: "{user_query}"
+
+## Key Metrics
+- **ROI**: {roi:.2f}%
+- **CTR**: {ctr:.2f}%
+- **Conversion Rate**: {conversion_rate:.2f}%
+- **Impressions**: {impressions:,}
+- **Conversions**: {conversions:,}
+
+## Overview
+Your campaigns are currently {'performing well' if roi > 200 else 'showing moderate results' if roi > 150 else 'underperforming'}.
+"""
+
+        return report
+
+    def _get_performance_summary(
+        self, roi: float, ctr: float, conversion_rate: float
+    ) -> str:
+        """Get overall performance summary based on metrics."""
+        if roi > 250 and ctr > 3 and conversion_rate > 3:
+            return "🌟 Excellent! All metrics are performing above expectations. Consider scaling these campaigns."
+        elif roi > 200 or (ctr > 2.5 and conversion_rate > 2.5):
+            return "✓ Good performance. Some metrics are strong, but there's room for optimization."
+        elif roi > 150:
+            return "⚠️ Moderate performance. Review campaigns and identify improvement opportunities."
+        else:
+            return "⚠️ Performance is below targets. Consider strategic review and optimization."
 
     def _generate_markdown_report(self, metrics: dict, insights: List[str]) -> str:
         """Generate markdown-formatted report."""

@@ -11,6 +11,8 @@ import logging
 import json
 import re
 
+from langchain_core.messages import SystemMessage, HumanMessage
+
 from ..core.base_agent import BaseAgent, AgentStatus
 from ..tools.web_search import WebSearchTool
 from ..tools.kb_search import KnowledgeBaseSearchTool
@@ -49,6 +51,13 @@ class MarketingStrategyAgent(BaseAgent):
         # Strategy templates and best practices
         self.strategy_templates = {}
 
+        # Market intelligence cache
+        self.market_intelligence = {}
+
+        # Initialize tools
+        self.web_search_tool = WebSearchTool()
+        self.kb_search_tool = KnowledgeBaseSearchTool()
+
     def _extract_json_from_response(self, content: str) -> str:
         """Extract JSON from LLM response, handling markdown code blocks.
 
@@ -70,13 +79,6 @@ class MarketingStrategyAgent(BaseAgent):
 
         return content
 
-        # Market intelligence cache
-        self.market_intelligence = {}
-
-        # Initialize tools
-        self.web_search_tool = WebSearchTool()
-        self.kb_search_tool = KnowledgeBaseSearchTool()
-
     def _register_tools(self) -> None:
         """Register marketing strategy tools."""
         self.register_tool("market_research", self._market_research)
@@ -87,6 +89,46 @@ class MarketingStrategyAgent(BaseAgent):
         self.register_tool("budget_allocation", self._budget_allocation)
         self.register_tool("keyword_research", self._keyword_research)
         self.register_tool("trend_analysis", self._trend_analysis)
+
+    def should_handoff(self, context: Dict[str, Any]) -> Optional[Any]:
+        """
+        Override base handoff logic to prevent inappropriate handoffs.
+
+        Only handoff when explicitly needed, not for routine strategy generation.
+        This prevents automatic handoffs triggered by common words in results.
+
+        Args:
+            context: Current execution context (typically the result)
+
+        Returns:
+            None - Marketing strategy should complete without handoffs for normal requests
+        """
+        # Check if this is an error case that needs escalation
+        if context.get("success") is False and context.get("error"):
+            # Even on errors, mark as final to avoid loops
+            return None
+
+        # Check if result explicitly requests a handoff
+        if context.get("handoff_required") is True:
+            target_agent = context.get("target_agent")
+            reason = context.get("handoff_reason", "explicit_handoff_request")
+
+            if target_agent:
+                from src.marketing_agents.core.base_agent import HandoffRequest
+
+                self.logger.info(
+                    f"Explicit handoff requested: {self.agent_id} -> {target_agent}"
+                )
+                return HandoffRequest(
+                    from_agent=self.agent_id,
+                    to_agent=target_agent,
+                    reason=reason,
+                    context=context,
+                )
+
+        # For normal marketing strategy generation, do not handoff
+        # The agent should complete its work and return final results
+        return None
 
     async def process(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -132,6 +174,10 @@ class MarketingStrategyAgent(BaseAgent):
             else:
                 result = await self._create_campaign_strategy(input_data)
 
+            # Check if handoff is needed
+            message = input_data.get("message", "")
+            handoff_info = self._detect_handoff_need(message, result)
+
             # Log execution
             duration = (datetime.utcnow() - start_time).total_seconds()
             self.log_execution(input_data, result, duration, True)
@@ -144,13 +190,27 @@ class MarketingStrategyAgent(BaseAgent):
 
             self.status = AgentStatus.IDLE
 
-            return {
+            # Determine if this is final based on handoff
+            is_final = not handoff_info.get("handoff_required", False)
+            summary = (
+                f"Routing to {handoff_info.get('target_agent', '')} agent for specialized assistance."
+                if handoff_info.get("handoff_required")
+                else f"Marketing strategy generated for {request_type}"
+            )
+
+            response_dict = {
                 "success": True,
                 "strategy": result,
                 "timestamp": datetime.utcnow().isoformat(),
-                "is_final": True,  # Mark result as final to complete workflow
-                "summary": f"Marketing strategy generated for {request_type}",
+                "is_final": is_final,
+                "summary": summary,
             }
+
+            # Add handoff information if needed
+            if handoff_info.get("handoff_required"):
+                response_dict.update(handoff_info)
+
+            return response_dict
 
         except Exception as e:
             self.logger.error(f"Strategy processing failed: {e}")
@@ -250,13 +310,87 @@ class MarketingStrategyAgent(BaseAgent):
         }
 
     async def _analyze_market(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Analyze market conditions."""
+        """
+        Analyze market conditions or customer insights.
+
+        Args:
+            input_data: Data containing market context or customer insights
+
+        Returns:
+            Market analysis or insight evaluation
+        """
+        self.logger.info(f"Analyzing market with input: {list(input_data.keys())}")
+
+        # Check if this is a customer insight handoff
+        if input_data.get("insight_type") or input_data.get("customer_message"):
+            return await self._analyze_customer_insight(input_data)
+
+        # Default market analysis
         return {
             "market_size": "Large and growing",
             "trends": await self._trend_analysis({}),
             "opportunities": ["Digital transformation", "Mobile-first"],
             "threats": ["Increased competition", "Market saturation"],
         }
+
+    async def _analyze_customer_insight(
+        self, input_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Analyze specific customer insight or feature request."""
+        try:
+            insight_type = input_data.get("insight_type", "general_insight")
+            message = input_data.get("customer_message", "")
+            sentiment = input_data.get("sentiment", "neutral")
+
+            system_prompt = """You are a Strategic Marketing Analyst.
+Analyze the provided customer insight or feature request.
+Evaluate the market opportunity, strategic fit, and potential impact.
+Provide a concise analysis with specific recommendations.
+
+Output Format:
+# Market Opportunity Analysis
+## Strategic Evaluation
+[Assessment of the request's alignment with market trends]
+
+## Potential Impact
+[Revenue or engagement impact]
+
+## Recommendations
+[Actionable next steps]
+"""
+
+            user_prompt = f"""
+Insight Type: {insight_type}
+Customer Feedback: "{message}"
+Sentiment: {sentiment}
+
+Please analyze this market signal.
+"""
+
+            if self.llm:
+                messages = [
+                    SystemMessage(content=system_prompt),
+                    HumanMessage(content=user_prompt),
+                ]
+                response = await self.llm.ainvoke(messages)
+                analysis = response.content
+            else:
+                analysis = "LLM not available for analysis."
+
+            return {
+                "analysis_type": "customer_insight_evaluation",
+                "insight_type": insight_type,
+                "original_message": message,
+                "analysis": analysis,
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+
+        except Exception as e:
+            self.logger.error(f"Insight analysis failed: {e}")
+            return {
+                "error": str(e),
+                "analysis": "Failed to analyze insight.",
+            }
 
     # Tool implementations
 
@@ -303,13 +437,13 @@ class MarketingStrategyAgent(BaseAgent):
                         }
                     )
 
-            # 2. Search web for market trends
+            # 2. Search web for market trends (with fallback if API fails)
             web_result = await self.web_search_tool.search_market_trends(
                 industry=query, time_range="past_year"
             )
 
             web_trends = []
-            if web_result["web_results"]["success"]:
+            if web_result.get("web_results", {}).get("success"):
                 for item in web_result["web_results"]["results"][:5]:
                     web_trends.append(
                         {
@@ -318,9 +452,17 @@ class MarketingStrategyAgent(BaseAgent):
                             "snippet": item["snippet"],
                         }
                     )
+            else:
+                # Log but don't fail - we can work with KB data alone
+                web_error = web_result.get("web_results", {}).get(
+                    "error", "Unknown error"
+                )
+                self.logger.warning(
+                    f"Web search failed (continuing without it): {web_error}"
+                )
 
             # Add news trends
-            if web_result["news_results"]["success"]:
+            if web_result.get("news_results", {}).get("success"):
                 for item in web_result["news_results"]["results"][:3]:
                     web_trends.append(
                         {
@@ -1057,3 +1199,138 @@ Based on the above research, provide 5 specific, actionable marketing recommenda
             "long_tail_keywords": list(set(long_tail_keywords))[:10],
             "product": product,
         }
+
+    def _detect_handoff_need(
+        self, message: str, result: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Detect if marketing strategy request warrants a handoff to another agent.
+
+        Analyzes the user message and context to determine if:
+        - Performance analysis needed (→ Analytics & Evaluation)
+        - Customer insights needed (→ Customer Support)
+        - Strategy optimization needed (→ Feedback & Learning)
+
+        Args:
+            message: User message text
+            result: Strategy result dictionary
+
+        Returns:
+            Dictionary with handoff information if needed, empty dict otherwise
+        """
+        handoff_info = {}
+        message_lower = message.lower()
+
+        self.logger.info(f"Checking handoff need for message: '{message[:100]}'")
+
+        # Scenario 1: Performance Analysis / Validation → Analytics Agent
+        # Keywords: analyze, performance, metrics, results, ROI, effectiveness, forecast
+        analytics_keywords = [
+            "analyze",
+            "analysis",
+            "performance",
+            "performing",
+            "metrics",
+            "results",
+            "roi",
+            "effectiveness",
+            "effective",
+            "forecast",
+            "predict",
+            "impact",
+            "measure",
+            "data",
+            "statistics",
+            "conversion",
+            "revenue",
+        ]
+
+        if any(keyword in message_lower for keyword in analytics_keywords):
+            self.logger.info(
+                "Handoff detected: analytics_evaluation (performance analysis request)"
+            )
+            handoff_info = {
+                "handoff_required": True,
+                "target_agent": "analytics_evaluation",
+                "handoff_reason": "strategy_validation_needed",
+                "context": {
+                    "analysis_type": "performance_validation",
+                    "user_message": message,
+                    "strategy_result": result,
+                    "recommendation": "Analytics team should perform data analysis and validation",
+                },
+            }
+            return handoff_info
+
+        # Scenario 2: Customer Feedback / Insights → Customer Support Agent
+        # Keywords: customer feedback, support tickets, complaints, what customers say, pain points
+        customer_insight_keywords = [
+            "customer feedback",
+            "customer complaints",
+            "support tickets",
+            "what customers say",
+            "what are customers",
+            "customers saying",
+            "customer pain",
+            "pain points",
+            "customer problems",
+            "customer issues",
+            "customer experience",
+            "customers experiencing",
+            "customer satisfaction",
+        ]
+
+        if any(keyword in message_lower for keyword in customer_insight_keywords):
+            self.logger.info(
+                "Handoff detected: customer_support (customer insights request)"
+            )
+            handoff_info = {
+                "handoff_required": True,
+                "target_agent": "customer_support",
+                "handoff_reason": "customer_insights_needed",
+                "context": {
+                    "insight_type": "customer_feedback_analysis",
+                    "user_message": message,
+                    "strategy_result": result,
+                    "recommendation": "Customer Support should analyze feedback themes and sentiment",
+                },
+            }
+            return handoff_info
+
+        # Scenario 3: Strategy Optimization / Improvement → Feedback & Learning Agent
+        # Keywords: improve, optimize, not working, underperforming, better results, A/B test
+        optimization_keywords = [
+            "improve",
+            "optimize",
+            "optimization",
+            "not working",
+            "underperform",
+            "underperforming",
+            "better results",
+            "how can i improve",
+            "a/b test",
+            "experiment",
+            "test different",
+            "set up test",
+            "help me test",
+        ]
+
+        if any(keyword in message_lower for keyword in optimization_keywords):
+            self.logger.info(
+                "Handoff detected: feedback_learning (optimization request)"
+            )
+            handoff_info = {
+                "handoff_required": True,
+                "target_agent": "feedback_learning",
+                "handoff_reason": "optimization_needed",
+                "context": {
+                    "optimization_type": "strategy_improvement",
+                    "user_message": message,
+                    "strategy_result": result,
+                    "recommendation": "Learning agent should analyze historical performance and recommend improvements",
+                },
+            }
+            return handoff_info
+
+        self.logger.info("No handoff needed - standard marketing strategy query")
+        return {}

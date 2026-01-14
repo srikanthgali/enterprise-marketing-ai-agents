@@ -136,7 +136,10 @@ class AnalyticsRequest(BaseModel):
     metrics: Optional[List[str]] = Field(
         None, description="Specific metrics to include"
     )
-    filters: Optional[Dict[str, Any]] = Field(None, description="Additional filters")
+    filters: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Additional filters (can include user_query for natural language queries)",
+    )
     format: Optional[str] = Field("json", description="Output format")
 
     @validator("report_type")

@@ -96,6 +96,17 @@ else
     echo -e "${GREEN}Running in DEVELOPMENT mode (default)${NC}"
 fi
 
+# Pre-flight check: Clean up existing ports
+echo ""
+echo -e "${YELLOW}Checking for existing processes on ports...${NC}"
+for port in 8000 7860 8501; do
+    PIDS=$(lsof -ti:$port 2>/dev/null || true)
+    if [ ! -z "$PIDS" ]; then
+        echo -e "${YELLOW}Freeing port $port (Killing PIDs: $(echo "$PIDS" | xargs))...${NC}"
+        echo "$PIDS" | xargs kill -9 2>/dev/null || true
+    fi
+done
+
 echo ""
 echo -e "${BLUE}============================================================================${NC}"
 echo -e "${CYAN}   Starting Services...${NC}"

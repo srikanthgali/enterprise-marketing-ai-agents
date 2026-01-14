@@ -101,14 +101,33 @@ class FeedbackLearningAgent(BaseAgent):
                 ],
             }
 
+            # Check if handoff is needed
+            message = input_data.get("message", "")
+            handoff_info = self._detect_handoff_need(message, result)
+
             self.status = AgentStatus.IDLE
-            return {
+
+            # Determine if this is final based on handoff
+            is_final = not handoff_info.get("handoff_required", False)
+            summary = (
+                f"Routing to {handoff_info.get('target_agent', '')} agent for specialized assistance."
+                if handoff_info.get("handoff_required")
+                else f"Learning analysis completed: {request_type}"
+            )
+
+            response_dict = {
                 "success": True,
                 "learning_results": result,
                 "timestamp": datetime.utcnow().isoformat(),
-                "is_final": True,
-                "summary": f"Learning analysis completed: {request_type}",
+                "is_final": is_final,
+                "summary": summary,
             }
+
+            # Add handoff information if needed
+            if handoff_info.get("handoff_required"):
+                response_dict.update(handoff_info)
+
+            return response_dict
 
         except Exception as e:
             self.logger.error(f"Learning processing failed: {e}")
@@ -848,3 +867,132 @@ class FeedbackLearningAgent(BaseAgent):
                 best_variant = variant
 
         return f"Recommended variant: {best_variant} (score: {best_score:.3f})"
+
+    def _detect_handoff_need(
+        self, message: str, result: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Detect if feedback & learning request warrants a handoff to another agent.
+
+        Analyzes the user message and context to determine if:
+        - System-wide changes needed (→ Orchestrator)
+        - Strategic insights to apply (→ Marketing Strategy)
+        - Performance validation needed (→ Analytics & Evaluation)
+
+        Args:
+            message: User message text
+            result: Learning result dictionary
+
+        Returns:
+            Dictionary with handoff information if needed, empty dict otherwise
+        """
+        handoff_info = {}
+        message_lower = message.lower()
+
+        self.logger.info(f"Checking handoff need for message: '{message[:100]}'")
+
+        # Scenario 1: System-Wide Configuration / Critical Issues → Orchestrator
+        # Keywords: system-wide, all agents, configuration change, global update, critical, emergency
+        orchestrator_keywords = [
+            "system-wide",
+            "system wide",
+            "all agents",
+            "configuration change",
+            "global update",
+            "critical",
+            "emergency",
+            "system down",
+            "all agents affected",
+            "entire system",
+            "across all agents",
+        ]
+
+        if any(keyword in message_lower for keyword in orchestrator_keywords):
+            self.logger.info(
+                "Handoff detected: orchestrator (system-wide change request)"
+            )
+            handoff_info = {
+                "handoff_required": True,
+                "target_agent": "orchestrator",
+                "handoff_reason": "system_update_ready",
+                "context": {
+                    "update_type": "system_configuration",
+                    "user_message": message,
+                    "learning_result": result,
+                    "recommendation": "Orchestrator should coordinate system-wide changes",
+                },
+            }
+            return handoff_info
+
+        # Scenario 2: Strategic Learning / Best Practice → Marketing Strategy Agent
+        # Keywords: strategic pattern, best practice, should inform strategy, change approach
+        strategic_keywords = [
+            "strategic pattern",
+            "strategic learning",
+            "best practice",
+            "should inform strategy",
+            "change approach",
+            "strategy should",
+            "inform strategy",
+            "optimization opportunity",
+            "should invest more",
+            "channel reallocation",
+            "underutilized",
+            "better roi",
+        ]
+
+        if any(keyword in message_lower for keyword in strategic_keywords):
+            self.logger.info(
+                "Handoff detected: marketing_strategy (strategic learning application)"
+            )
+            handoff_info = {
+                "handoff_required": True,
+                "target_agent": "marketing_strategy",
+                "handoff_reason": "strategic_learning",
+                "context": {
+                    "learning_type": "strategic_pattern_discovered",
+                    "user_message": message,
+                    "learning_result": result,
+                    "recommendation": "Marketing Strategy should incorporate this learning into campaigns",
+                },
+            }
+            return handoff_info
+
+        # Scenario 3: Validation / Impact Measurement → Analytics & Evaluation Agent
+        # Keywords: validate, analyze impact, need data on, measure effect, before and after
+        analytics_keywords = [
+            "validate",
+            "validation",
+            "analyze impact",
+            "need data on",
+            "measure effect",
+            "measure impact",
+            "measure the",
+            "measure actual",
+            "did it work",
+            "before and after",
+            "validate improvement",
+            "deeper analysis",
+            "performance impact",
+            "statistical",
+        ]
+
+        if any(keyword in message_lower for keyword in analytics_keywords):
+            self.logger.info(
+                "Handoff detected: analytics_evaluation (validation request)"
+            )
+            handoff_info = {
+                "handoff_required": True,
+                "target_agent": "analytics_evaluation",
+                "handoff_reason": "analysis_needed",
+                "context": {
+                    "analysis_type": "learning_validation",
+                    "user_message": message,
+                    "learning_result": result,
+                    "recommendation": "Analytics should perform statistical validation and impact measurement",
+                },
+            }
+            return handoff_info
+
+        self.logger.info("No handoff needed - standard learning query")
+        return {}

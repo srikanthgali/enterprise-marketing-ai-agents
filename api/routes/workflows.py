@@ -81,13 +81,9 @@ async def execute_workflow_async(
         agents_executed = []
         if result.get("execution_summary"):
             execution_summary = result["execution_summary"]
-            # Get agents from execution history
-            if "execution_history" in execution_summary:
-                agents_executed = [
-                    step.get("agent_id")
-                    for step in execution_summary["execution_history"]
-                    if step.get("agent_id")
-                ]
+            # Get agents_executed directly from execution_summary
+            # (get_execution_summary already extracts them)
+            agents_executed = execution_summary.get("agents_executed", [])
 
         # Calculate progress (100% when completed)
         progress = 1.0

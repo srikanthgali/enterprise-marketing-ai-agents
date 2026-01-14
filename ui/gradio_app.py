@@ -92,16 +92,50 @@ class AgentChatInterface:
 
         # Auto routing
         if agent_choice == "Auto":
-            # Campaign/Strategy keywords
+            # Analytics keywords - Check FIRST (most specific)
             if any(
                 keyword in message_lower
                 for keyword in [
-                    "campaign",
-                    "marketing strategy",
+                    "analyze",
+                    "performance",
+                    "metrics",
+                    "report",
+                    "dashboard",
+                    "statistics",
+                    "data",
+                    "insights",
+                    "conversion",
+                    "rate",
+                    "roi",
+                    "trend",
+                    "pattern",
+                    "forecast",
+                    "prediction",
+                    "customer journey",
+                    "attribution",
+                    "funnel",
+                    "engagement",
+                    "revenue",
+                    "a/b test",
+                    "experiment",
+                    "anomaly",
+                    "correlation",
+                    "segment",
+                ]
+            ):
+                return "analytics", "Analytics Agent"
+
+            # Campaign/Strategy keywords - Check after analytics
+            elif any(
+                keyword in message_lower
+                for keyword in [
                     "launch",
                     "promote",
                     "advertising",
                     "plan a campaign",
+                    "create a campaign",
+                    "new campaign",
+                    "marketing strategy",
                 ]
             ):
                 return "campaign_launch", "Marketing Strategy Agent"
@@ -121,22 +155,6 @@ class AgentChatInterface:
                 ]
             ):
                 return "customer_support", "Customer Support Agent"
-
-            # Analytics keywords
-            elif any(
-                keyword in message_lower
-                for keyword in [
-                    "analyze",
-                    "performance",
-                    "metrics",
-                    "report",
-                    "dashboard",
-                    "statistics",
-                    "data",
-                    "insights",
-                ]
-            ):
-                return "analytics", "Analytics Agent"
 
             # Feedback/Improvement keywords
             elif any(
@@ -272,8 +290,8 @@ class AgentChatInterface:
             # Update status
             yield history, f"⚙️ Processing with {agent_name}...", {}
 
-            # Make API request
-            response = await self.client.post(endpoint, json=payload, timeout=30.0)
+            # Make API request (uses default timeout of 300s)
+            response = await self.client.post(endpoint, json=payload)
 
             if response.status_code == 200:
                 result = response.json()
@@ -284,7 +302,9 @@ class AgentChatInterface:
 
                 # Poll for completion
                 intermediate_count = 0
-                while intermediate_count < 30:  # Max 30 intermediate updates
+                while (
+                    intermediate_count < 150
+                ):  # Max 150 polls = 300 seconds (5 minutes)
                     try:
                         status_response = await self.client.get(
                             f"{API_BASE_URL}/workflows/{workflow_id}"
@@ -302,10 +322,18 @@ class AgentChatInterface:
 
                                 if result_response.status_code == 200:
                                     final_result = result_response.json()
+
                                     # API returns results key, not result
                                     result_data = final_result.get(
                                         "results", final_result.get("result", {})
                                     )
+
+                                    # Check if we need to unwrap further
+                                    if isinstance(result_data, dict):
+                                        if "final_result" in result_data:
+                                            result_data = result_data["final_result"]
+                                        elif "result" in result_data:
+                                            result_data = result_data["result"]
 
                                     # Format response
                                     response_text = self.format_workflow_result(
@@ -392,13 +420,193 @@ class AgentChatInterface:
 
     def format_workflow_result(self, result: Dict[str, Any], workflow_type: str) -> str:
         """Format workflow result for display."""
+        # Debug logging
+        print(
+            f"[DEBUG] format_workflow_result called with workflow_type={workflow_type}"
+        )
+        print(f"[DEBUG] result type: {type(result)}")
+        print(
+            f"[DEBUG] result keys: {result.keys() if isinstance(result, dict) else 'N/A'}"
+        )
+        if isinstance(result, dict) and "analytics" in result:
+            print(
+                f"[DEBUG] Analytics found! Keys in analytics: {result['analytics'].keys() if isinstance(result['analytics'], dict) else 'N/A'}"
+            )
+
         if not result:
             return "No result available."
 
         formatted = ""
 
-        # Extract main response
-        if "response" in result:
+        # Handle marketing strategy results
+        if "strategy" in result:
+            strategy = result["strategy"]
+            formatted += "# Marketing Strategy\n\n"
+
+            # Campaign name
+            if strategy.get("campaign_name"):
+                formatted += f"## {strategy['campaign_name']}\n\n"
+
+            # Objectives
+            if strategy.get("objectives"):
+                formatted += "### 🎯 Campaign Objectives\n\n"
+                objectives = strategy["objectives"]
+                if isinstance(objectives, list):
+                    for obj in objectives:
+                        formatted += f"- {obj}\n"
+                else:
+                    formatted += str(objectives)
+                formatted += "\n\n"
+
+            # Target Audience
+            if strategy.get("target_audience"):
+                formatted += "### 👥 Target Audience\n\n"
+                audience = strategy["target_audience"]
+                if isinstance(audience, dict):
+                    segments = audience.get("segments", [])
+                    if segments:
+                        for i, segment in enumerate(segments, 1):
+                            if isinstance(segment, dict):
+                                formatted += f"**Segment {i}:** {segment.get('name', 'Unnamed')}\n"
+                                if segment.get("description"):
+                                    formatted += f"- {segment['description']}\n"
+                                if segment.get("size"):
+                                    formatted += f"- Size: {segment['size']}\n"
+                            else:
+                                formatted += f"- {segment}\n"
+                    else:
+                        formatted += str(audience)
+                else:
+                    formatted += str(audience)
+                formatted += "\n\n"
+
+            # Channels
+            if strategy.get("channels"):
+                formatted += "### 📢 Marketing Channels\n\n"
+                channels = strategy["channels"]
+                if isinstance(channels, dict):
+                    channel_list = channels.get("channels", [])
+                    for channel in channel_list:
+                        if isinstance(channel, dict):
+                            formatted += f"**{channel.get('channel', 'Unknown')}**\n"
+                            if channel.get("allocation"):
+                                formatted += (
+                                    f"- Budget: ${channel['allocation']:,.0f}\n"
+                                )
+                            if channel.get("rationale"):
+                                formatted += f"- {channel['rationale']}\n"
+                        else:
+                            formatted += f"- {channel}\n"
+                elif isinstance(channels, list):
+                    for channel in channels:
+                        formatted += f"- {channel}\n"
+                else:
+                    formatted += str(channels)
+                formatted += "\n\n"
+
+            # Budget Allocation
+            if strategy.get("budget_allocation"):
+                formatted += "### 💰 Budget Allocation\n\n"
+                budget = strategy["budget_allocation"]
+                if isinstance(budget, dict):
+                    total = budget.get("total_budget", 0)
+                    formatted += f"**Total Budget:** ${total:,.0f}\n\n"
+                    allocations = budget.get("allocations", [])
+                    for alloc in allocations:
+                        if isinstance(alloc, dict):
+                            formatted += f"- **{alloc.get('channel', 'Unknown')}:** ${alloc.get('amount', 0):,.0f} ({alloc.get('percentage', 0):.0f}%)\n"
+                formatted += "\n\n"
+
+            # Content Strategy
+            if strategy.get("content_strategy"):
+                formatted += "### 📝 Content Strategy\n\n"
+                content = strategy["content_strategy"]
+                if isinstance(content, dict):
+                    items = content.get("items", [])
+                    formatted += (
+                        f"**Duration:** {content.get('duration_weeks', 0)} weeks\n\n"
+                    )
+                    if items:
+                        formatted += "**Content Calendar:**\n"
+                        for item in items[:6]:  # Show first 6 items
+                            if isinstance(item, dict):
+                                formatted += f"- Week {item.get('week', '?')}: {item.get('theme', 'N/A')} - {item.get('format', 'N/A')}\n"
+                        if len(items) > 6:
+                            formatted += f"\n...and {len(items) - 6} more items\n"
+                formatted += "\n\n"
+
+            # KPIs
+            if strategy.get("kpis"):
+                formatted += "### 📊 Key Performance Indicators\n\n"
+                kpis = strategy["kpis"]
+                if isinstance(kpis, list):
+                    for kpi in kpis:
+                        if isinstance(kpi, dict):
+                            formatted += f"- **{kpi.get('metric', 'Unknown')}:** {kpi.get('target', 'N/A')}\n"
+                        else:
+                            formatted += f"- {kpi}\n"
+                formatted += "\n\n"
+
+            # Recommendations
+            if strategy.get("recommendations"):
+                formatted += "### 💡 Recommendations\n\n"
+                recommendations = strategy["recommendations"]
+                if isinstance(recommendations, list):
+                    for rec in recommendations:
+                        formatted += f"- {rec}\n"
+                else:
+                    formatted += str(recommendations)
+                formatted += "\n\n"
+
+        # Analytics results
+        elif "analytics" in result:
+            analytics = result["analytics"]
+
+            # Check if there's a report (it's a string with markdown content)
+            if isinstance(analytics, dict) and "report" in analytics:
+                report = analytics["report"]
+                # Report can be either a string or a dict with report_content
+                if isinstance(report, str):
+                    # Use the string directly (it's already markdown)
+                    formatted += report
+                    formatted += "\n\n"
+                elif isinstance(report, dict) and "report_content" in report:
+                    # Use the pre-formatted markdown report
+                    formatted += report["report_content"]
+                    formatted += "\n\n"
+                else:
+                    # Fallback: Format analytics data manually
+                    formatted += "# 📊 Analytics Report\n\n"
+
+                    # Add metrics if available
+                    if "metrics" in analytics:
+                        metrics = analytics["metrics"]
+                        if isinstance(metrics, dict):
+                            # Campaign metrics
+                            if "campaign_metrics" in metrics:
+                                formatted += "## Campaign Performance\n\n"
+                                cm = metrics["campaign_metrics"]
+                                formatted += f"- **CTR:** {cm.get('ctr', 0):.2f}%\n"
+                                formatted += f"- **Conversion Rate:** {cm.get('conversion_rate', 0):.2f}%\n"
+                                formatted += f"- **ROI:** {cm.get('roi', 0):.2f}%\n"
+                                formatted += f"- **Total Impressions:** {cm.get('total_impressions', 0):,}\n"
+                                formatted += f"- **Total Conversions:** {cm.get('total_conversions', 0):,}\n\n"
+
+                    # Add insights if available from report dict
+                    if isinstance(report, dict):
+                        insights = report.get("insights", [])
+                        if insights:
+                            formatted += "## 💡 Key Insights\n\n"
+                            for insight in insights:
+                                formatted += f"- {insight}\n"
+                            formatted += "\n"
+            else:
+                # Analytics exists but no proper report structure
+                formatted += "# 📊 Analytics Report\n\n"
+                formatted += str(analytics) + "\n\n"
+
+        # Extract main response (for customer support)
+        elif "response" in result:
             formatted += result["response"] + "\n\n"
         elif "answer" in result:
             formatted += result["answer"] + "\n\n"
@@ -413,7 +621,7 @@ class AgentChatInterface:
 
         # Add citations if available (from customer support responses)
         if "citations" in result and result["citations"]:
-            formatted += "### Sources\n\n"
+            formatted += "### 📚 Sources\n\n"
             for citation in result["citations"]:
                 if isinstance(citation, dict):
                     source = citation.get("source", "Unknown")
@@ -425,7 +633,7 @@ class AgentChatInterface:
 
         # Add sources if available
         if "sources" in result and result["sources"]:
-            formatted += "### Sources\n\n"
+            formatted += "### 📚 Sources\n\n"
             for i, source in enumerate(result["sources"][:3], 1):
                 if isinstance(source, dict):
                     title = source.get("title", source.get("source", f"Source {i}"))
@@ -440,16 +648,16 @@ class AgentChatInterface:
 
         # Add metrics if available
         if "metrics" in result:
-            formatted += "### Key Metrics\n\n"
+            formatted += "### 📊 Key Metrics\n\n"
             metrics = result["metrics"]
             if isinstance(metrics, dict):
                 for key, value in metrics.items():
                     formatted += f"- **{key.replace('_', ' ').title()}:** {value}\n"
             formatted += "\n"
 
-        # Add recommendations if available
-        if "recommendations" in result:
-            formatted += "### Recommendations\n\n"
+        # Add recommendations if available (if not already shown in strategy)
+        if "recommendations" in result and "strategy" not in result:
+            formatted += "### 💡 Recommendations\n\n"
             recommendations = result["recommendations"]
             if isinstance(recommendations, list):
                 for rec in recommendations:

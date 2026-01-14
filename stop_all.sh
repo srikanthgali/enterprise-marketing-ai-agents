@@ -51,10 +51,10 @@ echo ""
 echo -e "${YELLOW}Checking for processes on default ports...${NC}"
 
 for port in 8000 7860 8501; do
-    PID=$(lsof -ti:$port 2>/dev/null)
-    if [ ! -z "$PID" ]; then
-        echo -e "${YELLOW}Killing process on port $port (PID: $PID)${NC}"
-        kill -9 "$PID" 2>/dev/null || true
+    PIDS=$(lsof -ti:$port 2>/dev/null)
+    if [ ! -z "$PIDS" ]; then
+        echo -e "${YELLOW}Killing processes on port $port (PIDs: $(echo "$PIDS" | xargs))${NC}"
+        echo "$PIDS" | xargs kill -9 2>/dev/null || true
     fi
 done
 

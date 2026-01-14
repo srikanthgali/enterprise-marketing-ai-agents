@@ -1,5 +1,5 @@
 """
-Web search tool using Serper API for market research and competitor analysis.
+Web search tool using SerpApi for market research and competitor analysis.
 
 Provides real-time web search capabilities for marketing intelligence gathering.
 """
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 class WebSearchTool:
     """
-    Web search tool using Serper API.
+    Web search tool using SerpApi.
 
     Capabilities:
     - General web search
@@ -26,14 +26,14 @@ class WebSearchTool:
     """
 
     def __init__(self):
-        """Initialize web search tool with Serper API."""
+        """Initialize web search tool with SerpApi."""
         self.settings = get_settings()
         self.api_key = self.settings.api.serper_api_key
 
         if not self.api_key:
-            logger.warning("Serper API key not configured. Web search will be limited.")
+            logger.warning("SerpApi key not configured. Web search will be limited.")
 
-        self.base_url = "https://google.serper.dev"
+        self.base_url = "https://serpapi.com/search"
         self.cache = {}  # Simple in-memory cache
 
     async def search(
@@ -44,7 +44,7 @@ class WebSearchTool:
         location: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Perform web search using Serper API.
+        Perform web search using SerpApi.
 
         Args:
             query: Search query string
@@ -56,7 +56,7 @@ class WebSearchTool:
             Dictionary containing search results with metadata
         """
         if not self.api_key:
-            logger.error("Serper API key not configured")
+            logger.error("SerpApi key not configured")
             return {"success": False, "error": "API key not configured", "results": []}
 
         # Check cache
@@ -67,19 +67,22 @@ class WebSearchTool:
 
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
-                headers = {
-                    "X-API-KEY": self.api_key.get_secret_value(),
-                    "Content-Type": "application/json",
+                # SerpApi uses query parameters, not headers
+                params = {
+                    "api_key": self.api_key.get_secret_value(),
+                    "engine": "google",
+                    "q": query,
+                    "num": num_results,
                 }
 
-                payload = {"q": query, "num": num_results}
-
                 if location:
-                    payload["location"] = location
+                    params["location"] = location
 
-                response = await client.post(
-                    f"{self.base_url}/{search_type}", headers=headers, json=payload
-                )
+                # Map search_type to SerpApi parameters
+                if search_type == "news":
+                    params["tbm"] = "nws"  # Google News
+
+                response = await client.get(self.base_url, params=params)
 
                 response.raise_for_status()
                 result = response.json()
@@ -106,7 +109,7 @@ class WebSearchTool:
 
     def _parse_results(self, raw_results: Dict, search_type: str) -> Dict[str, Any]:
         """
-        Parse and structure raw Serper API results.
+        Parse and structure raw SerpApi results.
 
         Args:
             raw_results: Raw API response
@@ -122,9 +125,10 @@ class WebSearchTool:
             "metadata": {},
         }
 
-        if search_type == "search":
+        # SerpApi uses "organic_results" not "organic"
+        if search_type == "search" or search_type == "news":
             # Organic search results
-            organic = raw_results.get("organic", [])
+            organic = raw_results.get("organic_results", [])
             structured["results"] = [
                 {
                     "title": item.get("title", ""),
@@ -136,34 +140,34 @@ class WebSearchTool:
             ]
 
             # Knowledge graph if available
-            if "knowledgeGraph" in raw_results:
-                kg = raw_results["knowledgeGraph"]
+            if "knowledge_graph" in raw_results:
+                kg = raw_results["knowledge_graph"]
                 structured["metadata"]["knowledge_graph"] = {
                     "title": kg.get("title", ""),
                     "type": kg.get("type", ""),
                     "description": kg.get("description", ""),
-                    "attributes": kg.get("attributes", {}),
                 }
 
             # Related searches
-            if "relatedSearches" in raw_results:
+            if "related_searches" in raw_results:
                 structured["metadata"]["related_searches"] = [
-                    item.get("query", "") for item in raw_results["relatedSearches"]
+                    item.get("query", "")
+                    for item in raw_results.get("related_searches", [])
                 ]
 
-        elif search_type == "news":
-            # News results
-            news = raw_results.get("news", [])
-            structured["results"] = [
-                {
-                    "title": item.get("title", ""),
-                    "url": item.get("link", ""),
-                    "snippet": item.get("snippet", ""),
-                    "source": item.get("source", ""),
-                    "date": item.get("date", ""),
-                }
-                for item in news
-            ]
+            # News results (for news search)
+            if "news_results" in raw_results:
+                news = raw_results.get("news_results", [])
+                structured["results"] = [
+                    {
+                        "title": item.get("title", ""),
+                        "url": item.get("link", ""),
+                        "snippet": item.get("snippet", ""),
+                        "source": item.get("source", ""),
+                        "date": item.get("date", ""),
+                    }
+                    for item in news
+                ]
 
         return structured
 

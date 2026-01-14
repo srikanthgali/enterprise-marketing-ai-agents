@@ -39,7 +39,7 @@ def main():
                 "-m",
                 "streamlit",
                 "run",
-                "streamlit_app.py",
+                "ui/streamlit_app.py",
                 "--server.port=8501",
                 "--server.address=localhost",
                 "--browser.gatherUsageStats=false",
