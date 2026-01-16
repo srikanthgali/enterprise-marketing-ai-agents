@@ -361,24 +361,50 @@ class AgentChatInterface:
 
             elif workflow_type == "feedback_learning":
                 # Determine request type based on message content
+                # Check in priority order (most specific first)
                 request_type = "analyze_feedback"
                 message_lower = message.lower()
 
+                # Issue investigation - CHECK FIRST (highest priority)
                 if any(
                     keyword in message_lower
-                    for keyword in ["rate", "rating", "stars", "quality"]
-                ):
-                    request_type = "analyze_feedback"
-                elif any(
-                    keyword in message_lower
-                    for keyword in ["improve", "prediction", "accuracy"]
-                ):
-                    request_type = "prediction_improvement"
-                elif any(
-                    keyword in message_lower
-                    for keyword in ["investigate", "issues", "recurring", "pattern"]
+                    for keyword in [
+                        "investigate",
+                        "issues",
+                        "recurring",
+                        "pattern",
+                        "multiple agents",
+                        "several agents",
+                    ]
                 ):
                     request_type = "detect_patterns"
+                # Performance evaluation
+                elif any(
+                    keyword in message_lower
+                    for keyword in [
+                        "how well is",
+                        "agent performing",
+                        "performance of",
+                        "agent performance",
+                    ]
+                ):
+                    request_type = "analyze_feedback"
+                # User ratings/feedback
+                elif any(
+                    keyword in message_lower
+                    for keyword in ["rate", "rating", "stars", "quality", "/5"]
+                ):
+                    request_type = "analyze_feedback"
+                # Prediction/accuracy improvement (LAST - least priority)
+                elif any(
+                    keyword in message_lower
+                    for keyword in [
+                        "improve prediction",
+                        "prediction accuracy",
+                        "forecast accuracy",
+                    ]
+                ):
+                    request_type = "prediction_improvement"
 
                 payload = {
                     "message": message,
@@ -721,9 +747,158 @@ class AgentChatInterface:
         # Learning/Feedback results (from feedback_learning agent)
         elif "learning_results" in result:
             learning = result["learning_results"]
+            feedback_type = learning.get("feedback_type", "")
+            request_type = learning.get("request_type", "")
 
-            # Check for prediction improvement analysis
-            if learning.get("request_type") == "prediction_improvement":
+            # Performance Evaluation
+            if feedback_type == "performance_evaluation":
+                agent_name = learning.get("agent_name", "Agent")
+                formatted += f"# 📊 {agent_name.replace('_', ' ').title()} Performance Report\n\n"
+
+                analysis = learning.get("analysis", {})
+                if analysis:
+                    status = analysis.get("status", "Unknown")
+                    formatted += f"## Current Status: {status}\n\n"
+
+                    metrics = analysis.get("metrics", {})
+                    if metrics:
+                        formatted += "### 📈 Performance Metrics\n\n"
+                        for key, value in metrics.items():
+                            formatted += (
+                                f"- **{key.replace('_', ' ').title()}:** {value}\n"
+                            )
+                        formatted += "\n"
+
+                    if "performance_score" in analysis:
+                        formatted += f"**Overall Score:** {analysis['performance_score']:.2f}/1.0\n"
+                        formatted += (
+                            f"**Trend:** {analysis.get('trend', 'stable').title()}\n\n"
+                        )
+
+                # Recommendations
+                recommendations = learning.get("recommendations", [])
+                if recommendations:
+                    formatted += f"## 💡 {len(recommendations)} Recommendations\n\n"
+                    for i, rec in enumerate(recommendations, 1):
+                        formatted += f"### {i}. {rec.get('action', 'Action')}\n"
+                        formatted += f"**Priority:** {rec.get('priority', 'Medium')} | **Category:** {rec.get('category', 'General')}\n\n"
+                        formatted += f"{rec.get('details', '')}\n\n"
+                        formatted += f"*Expected Impact:* {rec.get('expected_impact', 'N/A')}\n\n"
+
+            # User Rating/Feedback
+            elif feedback_type == "user_rating":
+                formatted += "# 💬 User Feedback Analysis\n\n"
+
+                analysis = learning.get("analysis", {})
+                if analysis:
+                    rating = analysis.get("rating")
+                    if rating:
+                        stars = "⭐" * rating + "☆" * (5 - rating)
+                        formatted += f"## Rating: {rating}/5 {stars}\n\n"
+
+                    sentiment = analysis.get("sentiment", "").title()
+                    subject = (
+                        analysis.get("subject", "system").replace("_", " ").title()
+                    )
+                    formatted += f"**Subject:** {subject}\n"
+                    formatted += f"**Sentiment:** {sentiment}\n\n"
+
+                    issues = analysis.get("issues_mentioned", [])
+                    if issues:
+                        formatted += "**Issues Mentioned:**\n"
+                        for issue in issues:
+                            formatted += f"- {issue}\n"
+                        formatted += "\n"
+
+                # Recommendations
+                recommendations = learning.get("recommendations", [])
+                if recommendations:
+                    formatted += f"## 💡 {len(recommendations)} Improvement Actions\n\n"
+                    for i, rec in enumerate(recommendations, 1):
+                        formatted += f"### {i}. {rec.get('action', 'Action')}\n"
+                        formatted += f"**Priority:** {rec.get('priority', 'Medium')} | **Category:** {rec.get('category', 'General')}\n\n"
+                        formatted += f"{rec.get('details', '')}\n\n"
+                        formatted += f"*Expected Impact:* {rec.get('expected_impact', 'N/A')}\n\n"
+
+            # Recurring Issue / Pattern Detection
+            elif (
+                feedback_type == "recurring_issue" or request_type == "detect_patterns"
+            ):
+                formatted += "# 🔍 Issue Investigation Report\n\n"
+
+                analysis = learning.get("analysis", {})
+                if analysis:
+                    formatted += "## 📊 Issue Analysis\n\n"
+                    formatted += f"- **Affected Area:** {analysis.get('affected_area', 'Unknown').replace('_', ' ').title()}\n"
+                    formatted += f"- **Severity:** {analysis.get('severity', 'Unknown').title()}\n"
+                    formatted += f"- **Multiple Reports:** {'Yes' if analysis.get('multiple_reports') else 'No'}\n\n"
+
+                    issues = analysis.get("issues_identified", [])
+                    if issues:
+                        formatted += "**Issues Identified:**\n"
+                        for issue in issues:
+                            formatted += f"- {issue}\n"
+                        formatted += "\n"
+
+                # Recommendations
+                recommendations = learning.get("recommendations", [])
+                if recommendations:
+                    formatted += f"## 💡 {len(recommendations)} Recommended Actions\n\n"
+                    for i, rec in enumerate(recommendations, 1):
+                        formatted += f"### {i}. {rec.get('action', 'Action')}\n"
+                        formatted += f"**Priority:** {rec.get('priority', 'Medium')} | **Category:** {rec.get('category', 'General')}\n\n"
+                        formatted += f"{rec.get('details', '')}\n\n"
+                        formatted += f"*Expected Impact:* {rec.get('expected_impact', 'N/A')}\n\n"
+
+                # Next steps
+                next_steps = learning.get("next_steps", [])
+                if next_steps:
+                    formatted += "## 📋 Next Steps\n\n"
+                    for step in next_steps:
+                        formatted += f"- {step}\n"
+                    formatted += "\n"
+
+            # Success Pattern / Learning from Success
+            elif feedback_type == "success_pattern" or "key_learnings" in learning:
+                formatted += "# 🎓 Learning from Success\n\n"
+
+                analysis = learning.get("analysis", {})
+                if analysis:
+                    formatted += "## 📊 Success Analysis\n\n"
+                    success_type = (
+                        analysis.get("success_type", "general")
+                        .replace("_", " ")
+                        .title()
+                    )
+                    formatted += f"**Success Type:** {success_type}\n\n"
+
+                    metrics = analysis.get("metrics", {})
+                    if metrics:
+                        formatted += "**Key Metrics:**\n"
+                        for key, value in metrics.items():
+                            formatted += f"- {key.replace('_', ' ').title()}: {value}\n"
+                        formatted += "\n"
+
+                # Key learnings
+                learnings = learning.get("key_learnings", [])
+                if learnings:
+                    formatted += "## 🎯 Key Learnings\n\n"
+                    for learning_item in learnings:
+                        formatted += f"- {learning_item}\n"
+                    formatted += "\n"
+
+                # Recommendations
+                recommendations = learning.get("recommendations", [])
+                if recommendations:
+                    formatted += f"## 💡 {len(recommendations)} Recommendations\n\n"
+                    for i, rec in enumerate(recommendations, 1):
+                        formatted += f"### {i}. {rec.get('action', 'Action')}\n"
+                        formatted += f"**Priority:** {rec.get('priority', 'Medium')} | **Category:** {rec.get('category', 'General')}\n\n"
+                        formatted += f"{rec.get('details', '')}\n\n"
+                        formatted += f"*Expected Impact:* {rec.get('expected_impact', 'N/A')}\n\n"
+
+            # Prediction improvement analysis
+            elif request_type == "prediction_improvement":
                 formatted += "# 🎯 Prediction Improvement Analysis\n\n"
 
                 # Analysis section
@@ -768,7 +943,7 @@ class AgentChatInterface:
                         formatted += f"- {step}\n"
                     formatted += "\n"
 
-            # Generic feedback/learning results
+            # Generic feedback/learning results (fallback)
             else:
                 formatted += "# 📚 Learning & Feedback Analysis\n\n"
 

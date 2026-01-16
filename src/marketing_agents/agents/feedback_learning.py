@@ -529,6 +529,31 @@ class FeedbackLearningAgent(BaseAgent):
         """
         message_lower = message.lower()
 
+        # Check if this is an agent performance evaluation
+        if any(
+            phrase in message_lower
+            for phrase in [
+                "how well is",
+                "how is the",
+                "agent performing",
+                "agent performance",
+                "performance of",
+                "evaluate agent",
+            ]
+        ):
+            # Extract agent name if mentioned
+            agent_name = "system"
+            if "customer support" in message_lower or "support agent" in message_lower:
+                agent_name = "customer_support"
+            elif "marketing" in message_lower or "strategy" in message_lower:
+                agent_name = "marketing_strategy"
+            elif "analytics" in message_lower:
+                agent_name = "analytics_evaluation"
+            elif "feedback" in message_lower or "learning" in message_lower:
+                agent_name = "feedback_learning"
+
+            return self._generate_performance_evaluation(agent_name, time_range)
+
         # Check if this is a "what should we learn" scenario
         if any(
             phrase in message_lower
@@ -840,6 +865,9 @@ class FeedbackLearningAgent(BaseAgent):
 
         return {
             "request_type": "detect_patterns",
+            "feedback_type": (
+                "recurring_issue" if multiple_reports else "reported_issue"
+            ),
             "pattern_type": "recurring_issue" if multiple_reports else "reported_issue",
             "analysis": {
                 "affected_area": affected_area,
@@ -886,6 +914,158 @@ class FeedbackLearningAgent(BaseAgent):
                 issues.append(issue)
 
         return issues if issues else ["Unspecified issue"]
+
+    def _generate_performance_evaluation(
+        self, agent_name: str, time_range: str = "last_7_days"
+    ) -> dict:
+        """Generate performance evaluation for a specific agent.
+
+        Args:
+            agent_name: Name of agent to evaluate
+            time_range: Time range for evaluation
+
+        Returns:
+            dict: Performance evaluation with metrics and recommendations
+        """
+        # Aggregate feedback for this agent
+        feedback_data = self._aggregate_feedback(source="all", time_range=time_range)
+
+        # Get agent-specific metrics
+        agent_metrics = feedback_data.get("agent_feedback", {}).get(agent_name, {})
+
+        if not agent_metrics or agent_metrics.get("executions", 0) == 0:
+            # No data available - provide guidance on what to measure
+            return {
+                "request_type": "analyze_feedback",
+                "feedback_type": "performance_evaluation",
+                "agent_name": agent_name,
+                "analysis": {
+                    "status": "Insufficient data",
+                    "message": f"No execution data available for {agent_name} in the {time_range} period.",
+                    "metrics": {
+                        "executions": 0,
+                        "avg_response_time": "N/A",
+                        "success_rate": "N/A",
+                        "errors": 0,
+                    },
+                },
+                "recommendations": [
+                    {
+                        "priority": "High",
+                        "category": "Data Collection",
+                        "action": "Enable comprehensive agent monitoring",
+                        "details": f"Set up metrics collection for {agent_name} to track: execution count, response times, success rates, error patterns, and user satisfaction scores.",
+                        "expected_impact": "Establish performance baseline for ongoing optimization",
+                    },
+                    {
+                        "priority": "High",
+                        "category": "Testing",
+                        "action": "Execute test workflows",
+                        "details": f"Run sample workflows through {agent_name} to generate initial performance data and identify any immediate issues.",
+                        "expected_impact": "Generate baseline metrics for evaluation",
+                    },
+                    {
+                        "priority": "Medium",
+                        "category": "KPI Definition",
+                        "action": "Define success metrics",
+                        "details": "Establish clear KPIs for agent performance: target response time (<30s), success rate (>85%), user satisfaction (>4/5), and handoff accuracy (>90%).",
+                        "expected_impact": "Enable objective performance assessment",
+                    },
+                    {
+                        "priority": "Medium",
+                        "category": "Monitoring",
+                        "action": "Implement continuous monitoring",
+                        "details": "Set up dashboards and alerts to track agent performance in real-time, with automated notifications for performance degradation.",
+                        "expected_impact": "Proactive identification of performance issues",
+                    },
+                ],
+                "summary": f"Performance evaluation for {agent_name}: Insufficient data for comprehensive analysis. Implement monitoring and testing to establish baseline metrics.",
+            }
+
+        # Evaluate performance with available data
+        evaluation = self._evaluate_agent_performance(agent_name, agent_metrics)
+
+        # Generate specific recommendations based on performance
+        recommendations = []
+
+        # Check response time
+        avg_time = agent_metrics.get("avg_response_time", 0)
+        if avg_time > self.performance_baselines["response_time"]:
+            recommendations.append(
+                {
+                    "priority": "High",
+                    "category": "Performance",
+                    "action": "Optimize response time",
+                    "details": f"Average response time ({avg_time:.1f}s) exceeds target ({self.performance_baselines['response_time']}s). Review prompt complexity, reduce unnecessary tool calls, and implement caching for common queries.",
+                    "expected_impact": f"Reduce response time to <{self.performance_baselines['response_time']}s",
+                }
+            )
+        else:
+            recommendations.append(
+                {
+                    "priority": "Low",
+                    "category": "Performance",
+                    "action": "Maintain response time performance",
+                    "details": f"Response time ({avg_time:.1f}s) is within target range. Continue monitoring to ensure consistency.",
+                    "expected_impact": "Sustained fast response times",
+                }
+            )
+
+        # Check success rate
+        success_rate = agent_metrics.get("success_rate", 0)
+        if success_rate < self.performance_baselines["success_rate"]:
+            recommendations.append(
+                {
+                    "priority": "High",
+                    "category": "Reliability",
+                    "action": "Improve success rate",
+                    "details": f"Success rate ({success_rate:.1%}) is below target ({self.performance_baselines['success_rate']:.0%}). Analyze error patterns, improve error handling, and add input validation.",
+                    "expected_impact": f"Increase success rate to >{self.performance_baselines['success_rate']:.0%}",
+                }
+            )
+        else:
+            recommendations.append(
+                {
+                    "priority": "Low",
+                    "category": "Reliability",
+                    "action": "Maintain high success rate",
+                    "details": f"Success rate ({success_rate:.1%}) meets or exceeds target. Continue monitoring and address errors proactively.",
+                    "expected_impact": "Sustained high reliability",
+                }
+            )
+
+        # Check error patterns
+        errors = agent_metrics.get("errors", 0)
+        if errors > 0:
+            recommendations.append(
+                {
+                    "priority": "Medium",
+                    "category": "Error Handling",
+                    "action": "Analyze and reduce errors",
+                    "details": f"Detected {errors} errors in {time_range}. Review error logs to identify root causes, implement fixes, and add preventive measures.",
+                    "expected_impact": "Reduce error rate by 50%",
+                }
+            )
+
+        return {
+            "request_type": "analyze_feedback",
+            "feedback_type": "performance_evaluation",
+            "agent_name": agent_name,
+            "time_range": time_range,
+            "analysis": {
+                "status": "Data available",
+                "metrics": {
+                    "executions": agent_metrics.get("executions", 0),
+                    "avg_response_time": f"{avg_time:.2f}s",
+                    "success_rate": f"{success_rate:.1%}",
+                    "errors": errors,
+                },
+                "performance_score": evaluation.get("performance_score", 0),
+                "trend": evaluation.get("trend", "stable"),
+            },
+            "recommendations": recommendations,
+            "summary": f"Performance evaluation for {agent_name}: {len(agent_metrics.get('executions', 0))} executions analyzed. Overall performance score: {evaluation.get('performance_score', 0):.2f}/1.0 ({evaluation.get('trend', 'stable')} trend).",
+        }
 
     def _generate_rating_recommendations(
         self, rating: Optional[int], message: str, subject: str
