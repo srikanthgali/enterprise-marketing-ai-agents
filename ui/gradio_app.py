@@ -92,80 +92,160 @@ class AgentChatInterface:
 
         # Auto routing
         if agent_choice == "Auto":
-            # Analytics keywords - Check FIRST (most specific)
+            # Feedback/Learning keywords - Check FIRST (highest priority for learning queries)
+            # Performance evaluation queries
             if any(
                 keyword in message_lower
                 for keyword in [
-                    "analyze",
-                    "performance",
-                    "metrics",
-                    "report",
-                    "dashboard",
-                    "statistics",
-                    "data",
-                    "insights",
-                    "conversion",
-                    "rate",
-                    "roi",
-                    "trend",
-                    "pattern",
-                    "forecast",
-                    "prediction",
-                    "customer journey",
-                    "attribution",
-                    "funnel",
-                    "engagement",
-                    "revenue",
-                    "a/b test",
-                    "experiment",
-                    "anomaly",
-                    "correlation",
-                    "segment",
+                    "how well is",
+                    "how is the",
+                    "agent performing",
+                    "agent performance",
+                    "performance of",
+                    "evaluate agent",
+                    "agent evaluation",
+                ]
+            ):
+                return "feedback_learning", "Feedback Learning Agent"
+
+            # Learning from data queries
+            elif any(
+                keyword in message_lower
+                for keyword in [
+                    "what should we learn",
+                    "what can we learn",
+                    "what did we learn",
+                    "learn from this",
+                    "learn from",
+                    "takeaways from",
+                    "lessons from",
+                ]
+            ):
+                return "feedback_learning", "Feedback Learning Agent"
+
+            # Issue investigation queries
+            elif any(
+                keyword in message_lower
+                for keyword in [
+                    "multiple agents",
+                    "several agents",
+                    "agents are reporting",
+                    "agents report",
+                    "investigate and",
+                    "investigate the",
+                    "recurring issue",
+                    "recurring problem",
+                    "keeps happening",
+                    "happening again",
+                ]
+            ):
+                return "feedback_learning", "Feedback Learning Agent"
+
+            # User feedback and ratings
+            elif any(
+                keyword in message_lower
+                for keyword in [
+                    "rating",
+                    "stars",
+                    "/5",
+                    "quality of the",
+                    "rate the",
+                    "too generic",
+                    "not specific enough",
+                    "feedback on",
+                ]
+            ):
+                return "feedback_learning", "Feedback Learning Agent"
+
+            # System improvement queries
+            elif any(
+                keyword in message_lower
+                for keyword in [
+                    "improve prediction",
+                    "improve forecast",
+                    "improve accuracy",
+                    "optimize system",
+                    "system improvement",
+                    "how can we improve",
+                    "ways to improve",
+                ]
+            ):
+                return "feedback_learning", "Feedback Learning Agent"
+
+            # Analytics keywords - Check for pure analysis/reporting requests
+            elif any(
+                keyword in message_lower
+                for keyword in [
+                    "analyze performance",
+                    "show me metrics",
+                    "generate report",
+                    "create dashboard",
+                    "create a report",
+                    "view statistics",
+                    "display data",
+                    "calculate roi",
+                    "measure conversion",
+                    "track funnel",
+                    "customer journey map",
+                    "attribution model",
+                    "a/b test results",
+                    "experiment results",
                 ]
             ):
                 return "analytics", "Analytics Agent"
 
-            # Campaign/Strategy keywords - Check after analytics
+            # Campaign/Strategy keywords - Check for campaign creation/planning
             elif any(
                 keyword in message_lower
                 for keyword in [
-                    "launch",
-                    "promote",
-                    "advertising",
-                    "plan a campaign",
+                    "launch a campaign",
+                    "launch campaign",
                     "create a campaign",
+                    "create campaign",
                     "new campaign",
+                    "plan a campaign",
+                    "plan campaign",
+                    "campaign strategy",
                     "marketing strategy",
+                    "content calendar",
+                    "editorial calendar",
+                    "content plan",
+                    "email sequence",
+                    "nurture sequence",
+                    "drip campaign",
+                    "market research",
+                    "competitive analysis",
+                    "go-to-market",
+                    "gtm strategy",
                 ]
             ):
                 return "campaign_launch", "Marketing Strategy Agent"
 
-            # Support/KB keywords
+            # Support/KB keywords - Help and documentation queries
             elif any(
                 keyword in message_lower
                 for keyword in [
+                    "how do i",
                     "how does",
+                    "how to",
                     "what is",
-                    "explain",
-                    "documentation",
-                    "help",
-                    "support",
-                    "ticket",
-                    "customer",
+                    "explain how",
+                    "documentation for",
+                    "help me with",
+                    "support ticket",
+                    "customer issue with",
                 ]
             ):
                 return "customer_support", "Customer Support Agent"
 
-            # Feedback/Improvement keywords
+            # Default to feedback learning for improvement-related queries
             elif any(
                 keyword in message_lower
                 for keyword in [
                     "improve",
-                    "feedback",
-                    "learning",
-                    "optimize",
-                    "enhancement",
                     "better",
+                    "enhance",
+                    "optimize",
                 ]
             ):
                 return "feedback_learning", "Feedback Learning Agent"
@@ -279,7 +359,40 @@ class AgentChatInterface:
                 }
                 endpoint = f"{API_BASE_URL}/workflows/analytics"
 
-            else:  # feedback_learning
+            elif workflow_type == "feedback_learning":
+                # Determine request type based on message content
+                request_type = "analyze_feedback"
+                message_lower = message.lower()
+
+                if any(
+                    keyword in message_lower
+                    for keyword in ["rate", "rating", "stars", "quality"]
+                ):
+                    request_type = "analyze_feedback"
+                elif any(
+                    keyword in message_lower
+                    for keyword in ["improve", "prediction", "accuracy"]
+                ):
+                    request_type = "prediction_improvement"
+                elif any(
+                    keyword in message_lower
+                    for keyword in ["investigate", "issues", "recurring", "pattern"]
+                ):
+                    request_type = "detect_patterns"
+
+                payload = {
+                    "message": message,
+                    "request_type": request_type,
+                    "time_range": "last_7_days",
+                    "context": {
+                        "source": "user_feedback",
+                        "conversation_id": conversation_id,
+                    },
+                }
+                endpoint = f"{API_BASE_URL}/workflows/feedback-learning"
+
+            else:
+                # Fallback to customer support
                 payload = {
                     "inquiry": message,
                     "customer_id": f"user_{conversation_id[:8]}",
@@ -604,6 +717,97 @@ class AgentChatInterface:
                 # Analytics exists but no proper report structure
                 formatted += "# 📊 Analytics Report\n\n"
                 formatted += str(analytics) + "\n\n"
+
+        # Learning/Feedback results (from feedback_learning agent)
+        elif "learning_results" in result:
+            learning = result["learning_results"]
+
+            # Check for prediction improvement analysis
+            if learning.get("request_type") == "prediction_improvement":
+                formatted += "# 🎯 Prediction Improvement Analysis\n\n"
+
+                # Analysis section
+                analysis = learning.get("analysis", {})
+                if analysis:
+                    formatted += "## 📊 Current Status\n\n"
+                    formatted += f"**Query:** {analysis.get('query', 'N/A')}\n\n"
+
+                    current_metrics = analysis.get("current_metrics", {})
+                    if current_metrics:
+                        formatted += "**Current Performance:**\n"
+                        for key, value in current_metrics.items():
+                            formatted += f"- {key.replace('_', ' ').title()}: {value}\n"
+                        formatted += "\n"
+
+                    formatted += f"**Prediction Confidence:** {analysis.get('prediction_confidence', 'Unknown')}\n"
+                    formatted += f"**Data Quality:** {analysis.get('data_quality', 'Unknown')}\n\n"
+
+                # Recommendations section
+                recommendations = learning.get("recommendations", [])
+                if recommendations:
+                    formatted += f"## 💡 {len(recommendations)} Recommendations\n\n"
+                    for i, rec in enumerate(recommendations, 1):
+                        priority = rec.get("priority", "Medium")
+                        category = rec.get("category", "General")
+                        action = rec.get("action", "")
+                        details = rec.get("details", "")
+                        impact = rec.get("expected_impact", "")
+
+                        formatted += f"### {i}. {action}\n"
+                        formatted += (
+                            f"**Priority:** {priority} | **Category:** {category}\n\n"
+                        )
+                        formatted += f"{details}\n\n"
+                        formatted += f"*Expected Impact:* {impact}\n\n"
+
+                # Next steps
+                next_steps = learning.get("next_steps", [])
+                if next_steps:
+                    formatted += "## 📋 Next Steps\n\n"
+                    for step in next_steps:
+                        formatted += f"- {step}\n"
+                    formatted += "\n"
+
+            # Generic feedback/learning results
+            else:
+                formatted += "# 📚 Learning & Feedback Analysis\n\n"
+
+                # Feedback summary
+                if "feedback_summary" in learning:
+                    summary = learning["feedback_summary"]
+                    formatted += "## 📊 Summary\n\n"
+                    formatted += (
+                        f"- Total Items Analyzed: {summary.get('total_items', 0)}\n"
+                    )
+                    formatted += f"- Time Range: {summary.get('time_range', 'N/A')}\n"
+                    formatted += (
+                        f"- Agents Analyzed: {summary.get('agents_analyzed', 0)}\n\n"
+                    )
+
+                # Improvements
+                if "improvements" in learning:
+                    formatted += "## 💡 Improvements\n\n"
+                    improvements = learning["improvements"]
+                    if isinstance(improvements, list):
+                        for improvement in improvements:
+                            if isinstance(improvement, dict):
+                                formatted += f"- **{improvement.get('action', '')}:** {improvement.get('details', '')}\n"
+                            else:
+                                formatted += f"- {improvement}\n"
+                    formatted += "\n"
+
+                # Agent evaluations
+                if "agent_evaluations" in learning:
+                    evals = learning["agent_evaluations"]
+                    if evals:
+                        formatted += "## 🎯 Agent Performance\n\n"
+                        for agent_id, evaluation in evals.items():
+                            score = evaluation.get("score", 0)
+                            trend = evaluation.get("trend", "stable")
+                            formatted += (
+                                f"**{agent_id}:** Score {score:.2f} ({trend})\n"
+                            )
+                        formatted += "\n"
 
         # Extract main response (for customer support)
         elif "response" in result:

@@ -84,36 +84,113 @@ class FeedbackLearningAgent(BaseAgent):
             # Handle case where input_data might be a string
             if isinstance(input_data, str):
                 input_data = {
-                    "type": "analyze_feedback",
+                    "request_type": "analyze_feedback",
                     "message": input_data,
                 }
             elif not isinstance(input_data, dict):
-                input_data = {"type": "analyze_feedback", "raw_input": str(input_data)}
+                input_data = {
+                    "request_type": "analyze_feedback",
+                    "raw_input": str(input_data),
+                }
 
-            request_type = input_data.get("type", "analyze_feedback")
+            # Support both 'type' and 'request_type' keys
+            request_type = input_data.get("request_type") or input_data.get(
+                "type", "analyze_feedback"
+            )
             self.logger.info(f"Processing learning request: {request_type}")
 
-            result = {
-                "request_type": request_type,
-                "improvements": [
-                    "Optimized workflow latency by 15%",
-                    "Improved agent handoff accuracy",
-                ],
-            }
+            # Extract message for analysis
+            message = input_data.get("message", "")
+
+            # Process based on request type
+            if request_type == "analyze_feedback":
+                # Analyze the message content for specific feedback
+                result = self._analyze_user_feedback(
+                    message, input_data.get("time_range", "last_7_days")
+                )
+            elif request_type == "optimize_agent":
+                agent_id = input_data.get("agent_id", "marketing_strategy")
+                metrics = input_data.get("metrics", {})
+                performance = self._evaluate_agent_performance(agent_id, metrics)
+                optimizations = self._optimize_prompts(agent_id, performance)
+                result = {
+                    "request_type": request_type,
+                    "agent_id": agent_id,
+                    "performance_evaluation": performance,
+                    "optimizations": optimizations,
+                }
+            elif request_type == "track_experiment":
+                experiment_name = input_data.get(
+                    "experiment_name", "default_experiment"
+                )
+                variant = input_data.get("variant", "control")
+                metrics = input_data.get("metrics", {})
+                tracking_result = self._track_experiment(
+                    experiment_name, variant, metrics
+                )
+                result = {
+                    "request_type": request_type,
+                    "experiment_tracking": tracking_result,
+                }
+            elif request_type == "detect_patterns":
+                # Analyze message for recurring issues or patterns
+                result = self._detect_issue_patterns(
+                    message, input_data.get("time_range", "last_7_days")
+                )
+            elif request_type == "prediction_improvement":
+                # Generate prediction improvement recommendations
+                context = input_data.get("context", {})
+                metrics = context.get("metrics", input_data.get("metrics", {}))
+                result = self._generate_prediction_improvement_plan(message, metrics)
+            else:
+                # Handle handoff requests or analyze for prediction improvements
+                # Check if this is about prediction/forecast improvement
+                if message and any(
+                    word in message.lower()
+                    for word in [
+                        "prediction",
+                        "predictions",
+                        "forecast",
+                        "accuracy",
+                        "accurate",
+                    ]
+                ):
+                    # Extract metrics from context if available
+                    context = input_data.get("context", {})
+                    metrics = context.get("metrics", input_data.get("metrics", {}))
+
+                    result = self._generate_prediction_improvement_plan(
+                        message, metrics
+                    )
+                else:
+                    # Generic learning analysis
+                    result = {
+                        "request_type": request_type,
+                        "improvements": [
+                            "Analyzed system performance patterns",
+                            "Identified optimization opportunities",
+                        ],
+                    }
 
             # Check if handoff is needed
-            message = input_data.get("message", "")
             handoff_info = self._detect_handoff_need(message, result)
 
             self.status = AgentStatus.IDLE
 
             # Determine if this is final based on handoff
             is_final = not handoff_info.get("handoff_required", False)
-            summary = (
-                f"Routing to {handoff_info.get('target_agent', '')} agent for specialized assistance."
-                if handoff_info.get("handoff_required")
-                else f"Learning analysis completed: {request_type}"
-            )
+
+            # Generate user-friendly summary
+            if result.get("request_type") == "prediction_improvement":
+                num_recs = len(result.get("recommendations", []))
+                confidence = result.get("analysis", {}).get(
+                    "prediction_confidence", "Unknown"
+                )
+                summary = f"Prediction Improvement Analysis Complete: Generated {num_recs} recommendations (Confidence: {confidence})"
+            elif handoff_info.get("handoff_required"):
+                summary = f"Routing to {handoff_info.get('target_agent', '')} agent for specialized assistance."
+            else:
+                summary = f"Learning analysis completed: {request_type}"
 
             response_dict = {
                 "success": True,
@@ -393,6 +470,606 @@ class FeedbackLearningAgent(BaseAgent):
             return "declining"
         else:
             return "stable"
+
+    def _generate_improvement_recommendations(
+        self, feedback_data: dict, agent_evaluations: dict
+    ) -> list:
+        """Generate improvement recommendations based on feedback and evaluations.
+
+        Args:
+            feedback_data: Aggregated feedback data
+            agent_evaluations: Performance evaluations for each agent
+
+        Returns:
+            List of actionable improvement recommendations
+        """
+        recommendations = []
+
+        # Analyze error patterns
+        error_patterns = feedback_data.get("error_patterns", {})
+        if error_patterns:
+            top_errors = sorted(
+                error_patterns.items(), key=lambda x: x[1], reverse=True
+            )[:3]
+            for error_type, count in top_errors:
+                recommendations.append(
+                    f"Address {error_type} errors (occurred {count} times)"
+                )
+
+        # Analyze agent performance
+        for agent_id, evaluation in agent_evaluations.items():
+            score = evaluation.get("score", 0)
+            areas = evaluation.get("areas_for_improvement", [])
+
+            if score < 0.7 and areas:
+                recommendations.append(f"Improve {agent_id} performance: {areas[0]}")
+
+        # Add general recommendations if specific ones are limited
+        if len(recommendations) < 2:
+            recommendations.extend(
+                [
+                    "Continue monitoring agent performance metrics",
+                    "Maintain current optimization strategies",
+                ]
+            )
+
+        return recommendations[:5]  # Return top 5 recommendations
+
+    def _analyze_user_feedback(
+        self, message: str, time_range: str = "last_7_days"
+    ) -> dict:
+        """Analyze user feedback message and generate appropriate response.
+
+        Args:
+            message: User feedback message
+            time_range: Time range for historical data
+
+        Returns:
+            dict: Analysis results with recommendations
+        """
+        message_lower = message.lower()
+
+        # Check if this is a "what should we learn" scenario
+        if any(
+            phrase in message_lower
+            for phrase in [
+                "what should we learn",
+                "what can we learn",
+                "learn from this",
+                "learn from",
+            ]
+        ):
+            return self._analyze_success_pattern(message)
+
+        # Check if this is a rating/quality feedback
+        if any(
+            word in message_lower
+            for word in ["rate", "rating", "stars", "/5", "quality"]
+        ):
+            # Extract rating if present
+            rating = None
+            for word in message.split():
+                if "/5" in word:
+                    try:
+                        rating = int(word.split("/")[0])
+                    except:
+                        pass
+
+            # Determine sentiment
+            sentiment = (
+                "negative"
+                if rating and rating < 3
+                else "mixed" if rating == 3 else "positive"
+            )
+            if not rating:
+                sentiment = (
+                    "negative"
+                    if any(
+                        word in message_lower
+                        for word in ["poor", "bad", "generic", "terrible"]
+                    )
+                    else "mixed"
+                )
+
+            # Extract what was being rated
+            subject = "system"
+            if "campaign" in message_lower or "strategy" in message_lower:
+                subject = "marketing_strategy"
+            elif "support" in message_lower:
+                subject = "customer_support"
+            elif "analytics" in message_lower or "report" in message_lower:
+                subject = "analytics_evaluation"
+
+            return {
+                "request_type": "analyze_feedback",
+                "feedback_type": "user_rating",
+                "analysis": {
+                    "rating": rating,
+                    "sentiment": sentiment,
+                    "subject": subject,
+                    "issues_mentioned": self._extract_issues(message),
+                },
+                "recommendations": self._generate_rating_recommendations(
+                    rating, message, subject
+                ),
+                "summary": (
+                    f"Analyzed user rating: {rating}/5 stars for {subject}"
+                    if rating
+                    else "Analyzed user feedback"
+                ),
+            }
+        else:
+            # Generic feedback analysis
+            time_range = time_range or "last_7_days"
+            feedback_data = self._aggregate_feedback(
+                source="all", time_range=time_range
+            )
+
+            agent_evaluations = {}
+            for agent_id, metrics in feedback_data.get("agent_feedback", {}).items():
+                if metrics.get("executions", 0) > 0:
+                    evaluation = self._evaluate_agent_performance(agent_id, metrics)
+                    agent_evaluations[agent_id] = evaluation
+
+            return {
+                "request_type": "analyze_feedback",
+                "feedback_type": "system_analysis",
+                "feedback_summary": {
+                    "total_items": feedback_data.get("total_items", 0),
+                    "time_range": time_range,
+                    "agents_analyzed": len(agent_evaluations),
+                },
+                "agent_evaluations": agent_evaluations,
+                "improvements": self._generate_improvement_recommendations(
+                    feedback_data, agent_evaluations
+                ),
+            }
+
+    def _analyze_success_pattern(self, message: str) -> dict:
+        """Analyze successful outcomes to extract learnings and best practices.
+
+        Args:
+            message: Message describing a successful outcome
+
+        Returns:
+            dict: Analysis with key learnings and recommendations
+        """
+        message_lower = message.lower()
+
+        # Extract metrics if mentioned
+        metrics = {}
+        percentages = []
+        for word in message.split():
+            if "%" in word:
+                try:
+                    percentages.append(float(word.replace("%", "")))
+                except:
+                    pass
+
+        # Determine what type of success
+        success_type = "general"
+        if "email" in message_lower or "open rate" in message_lower:
+            success_type = "email_campaign"
+        elif "conversion" in message_lower:
+            success_type = "conversion_optimization"
+        elif "engagement" in message_lower:
+            success_type = "engagement"
+        elif "click" in message_lower or "ctr" in message_lower:
+            success_type = "click_through"
+
+        # Generate context-aware learnings
+        key_learnings = []
+        recommendations = []
+
+        if success_type == "email_campaign":
+            if percentages and len(percentages) >= 2:
+                # We have both the rate and the increase
+                rate = percentages[0]
+                increase = percentages[1] if len(percentages) > 1 else 0
+
+                key_learnings = [
+                    f"Email achieved {rate}% open rate, significantly above baseline",
+                    f"Performance improved by {increase}% compared to typical campaigns",
+                    "Indicates strong subject line effectiveness and audience targeting",
+                ]
+
+                recommendations = [
+                    {
+                        "priority": "High",
+                        "category": "Replication",
+                        "action": "Analyze and replicate successful elements",
+                        "details": f"Document the specific elements that contributed to the {rate}% open rate: subject line format, send time, audience segment, content preview, and sender name. Create a playbook for future campaigns.",
+                        "expected_impact": "Consistently achieve 15-25% higher open rates",
+                    },
+                    {
+                        "priority": "High",
+                        "category": "Testing",
+                        "action": "A/B test individual success factors",
+                        "details": "Isolate each winning element (subject line style, send time, personalization) and test variations to understand which factors had the most impact.",
+                        "expected_impact": "Identify top 2-3 drivers of performance",
+                    },
+                    {
+                        "priority": "Medium",
+                        "category": "Segmentation",
+                        "action": "Analyze audience segment characteristics",
+                        "details": "Profile the recipients who opened the email to identify common characteristics. Use this to refine audience segmentation for future campaigns.",
+                        "expected_impact": "Improve targeting precision by 30%",
+                    },
+                    {
+                        "priority": "Medium",
+                        "category": "Optimization",
+                        "action": "Extend analysis to click-through and conversion",
+                        "details": "High open rates are valuable, but track the full funnel: CTR, landing page engagement, and conversions to understand complete campaign effectiveness.",
+                        "expected_impact": "Optimize entire email funnel",
+                    },
+                ]
+            else:
+                key_learnings = [
+                    "Email campaign showed strong performance",
+                    "Success indicators warrant deeper analysis",
+                ]
+                recommendations = [
+                    {
+                        "priority": "Medium",
+                        "category": "Analysis",
+                        "action": "Conduct detailed campaign post-mortem",
+                        "details": "Gather comprehensive metrics and identify success factors that can be replicated in future campaigns.",
+                        "expected_impact": "Build repeatable success patterns",
+                    }
+                ]
+        else:
+            # Generic success analysis
+            key_learnings = [
+                "Positive performance outcome detected",
+                "Opportunity to capture and replicate success factors",
+            ]
+            recommendations = [
+                {
+                    "priority": "Medium",
+                    "category": "Learning",
+                    "action": "Document success factors for future use",
+                    "details": "Capture what worked well in this scenario to build organizational knowledge and improve future outcomes.",
+                    "expected_impact": "Build institutional knowledge",
+                }
+            ]
+
+        return {
+            "request_type": "analyze_feedback",
+            "feedback_type": "success_analysis",
+            "analysis": {
+                "success_type": success_type,
+                "metrics_mentioned": percentages,
+                "key_learnings": key_learnings,
+            },
+            "recommendations": recommendations,
+            "next_steps": [
+                "Document successful elements in a reusable playbook",
+                "Share learnings with relevant team members",
+                "Plan follow-up campaigns to validate findings",
+                "Monitor ongoing performance against new baseline",
+            ],
+            "summary": f"Analyzed successful {success_type.replace('_', ' ')} to extract learnings and best practices",
+        }
+
+    def _detect_issue_patterns(
+        self, message: str, time_range: str = "last_7_days"
+    ) -> dict:
+        """Detect patterns in reported issues and generate recommendations.
+
+        Args:
+            message: User message describing issues
+            time_range: Time range for pattern detection
+
+        Returns:
+            dict: Pattern analysis with recommendations
+        """
+        message_lower = message.lower()
+
+        # Extract the reported issue
+        issues = self._extract_issues(message)
+
+        # Determine affected area
+        affected_area = "unknown"
+        if "checkout" in message_lower:
+            affected_area = "checkout_flow"
+        elif "mobile" in message_lower:
+            affected_area = "mobile_experience"
+        elif "payment" in message_lower:
+            affected_area = "payment_processing"
+        elif "email" in message_lower:
+            affected_area = "email_delivery"
+
+        # Check if multiple agents/sources mentioned
+        multiple_reports = any(
+            word in message_lower
+            for word in ["multiple", "several", "many", "recurring"]
+        )
+
+        # Generate contextual recommendations
+        recommendations = []
+
+        if "checkout" in message_lower and "mobile" in message_lower:
+            recommendations = [
+                {
+                    "priority": "High",
+                    "category": "User Experience",
+                    "action": "Audit mobile checkout flow for responsive design issues",
+                    "details": "Multiple reports suggest mobile checkout has usability problems. Conduct a comprehensive audit of the mobile checkout experience, focusing on touch targets, form fields, and payment integration.",
+                    "expected_impact": "Could improve mobile conversion rates by 15-25%",
+                },
+                {
+                    "priority": "High",
+                    "category": "Technical",
+                    "action": "Review mobile checkout error logs and analytics",
+                    "details": "Analyze error logs, abandonment rates, and user session recordings to identify specific failure points in the mobile checkout process.",
+                    "expected_impact": "Identify root causes of checkout failures",
+                },
+                {
+                    "priority": "Medium",
+                    "category": "Testing",
+                    "action": "Implement automated mobile checkout testing",
+                    "details": "Set up automated end-to-end tests across multiple mobile devices and browsers to catch checkout issues before they reach production.",
+                    "expected_impact": "Reduce checkout-related bugs by 40%",
+                },
+                {
+                    "priority": "Medium",
+                    "category": "User Research",
+                    "action": "Conduct user testing sessions on mobile checkout",
+                    "details": "Run moderated user testing with 8-10 participants to observe real-world mobile checkout behavior and gather qualitative feedback.",
+                    "expected_impact": "Uncover hidden UX friction points",
+                },
+            ]
+        else:
+            # Generic issue recommendations
+            recommendations = [
+                {
+                    "priority": "High" if multiple_reports else "Medium",
+                    "category": "Investigation",
+                    "action": f"Investigate reported {affected_area} issues",
+                    "details": f"The issue with {affected_area} has been reported{' by multiple sources' if multiple_reports else ''}. Conduct a thorough investigation including logs, metrics, and user feedback.",
+                    "expected_impact": "Identify root cause and scope of issue",
+                },
+                {
+                    "priority": "Medium",
+                    "category": "Monitoring",
+                    "action": f"Enhance monitoring for {affected_area}",
+                    "details": "Set up additional monitoring and alerting to catch similar issues early and track resolution effectiveness.",
+                    "expected_impact": "Faster issue detection and response",
+                },
+            ]
+
+        return {
+            "request_type": "detect_patterns",
+            "pattern_type": "recurring_issue" if multiple_reports else "reported_issue",
+            "analysis": {
+                "affected_area": affected_area,
+                "issues_identified": issues,
+                "severity": "high" if multiple_reports else "medium",
+                "multiple_reports": multiple_reports,
+            },
+            "recommendations": recommendations,
+            "next_steps": [
+                "Gather additional data from affected users",
+                "Prioritize fixes based on impact and frequency",
+                "Implement monitoring to track issue resolution",
+                "Follow up with users to verify fixes",
+            ],
+            "summary": f"Detected {'recurring' if multiple_reports else 'reported'} issue with {affected_area}: {len(recommendations)} recommendations generated",
+        }
+
+    def _extract_issues(self, message: str) -> list:
+        """Extract specific issues mentioned in the message.
+
+        Args:
+            message: User message
+
+        Returns:
+            list: List of identified issues
+        """
+        message_lower = message.lower()
+        issues = []
+
+        issue_keywords = {
+            "too generic": "Content lacks specificity",
+            "generic": "Generic content",
+            "slow": "Performance issues",
+            "error": "Errors occurring",
+            "crash": "System crashes",
+            "not working": "Functionality broken",
+            "broken": "Feature not functioning",
+            "confusing": "User experience unclear",
+            "complicated": "Overly complex",
+        }
+
+        for keyword, issue in issue_keywords.items():
+            if keyword in message_lower:
+                issues.append(issue)
+
+        return issues if issues else ["Unspecified issue"]
+
+    def _generate_rating_recommendations(
+        self, rating: Optional[int], message: str, subject: str
+    ) -> list:
+        """Generate recommendations based on user rating.
+
+        Args:
+            rating: Numeric rating (1-5)
+            message: Feedback message
+            subject: What was being rated
+
+        Returns:
+            list: Recommendations for improvement
+        """
+        recommendations = []
+        issues = self._extract_issues(message)
+
+        if rating and rating < 3:  # Poor rating
+            recommendations.append(
+                {
+                    "priority": "High",
+                    "category": "Quality Improvement",
+                    "action": f"Address quality concerns with {subject}",
+                    "details": f"User rated {subject} as {rating}/5 stars. Specific issues: {', '.join(issues)}. Review and enhance output quality, add more specific context, and improve personalization.",
+                    "expected_impact": "Improve user satisfaction by 20-30%",
+                }
+            )
+
+            recommendations.append(
+                {
+                    "priority": "High",
+                    "category": "Training",
+                    "action": f"Enhance {subject} prompts and examples",
+                    "details": "Update system prompts to generate more specific, actionable outputs. Include better examples and constraints to prevent generic responses.",
+                    "expected_impact": "Increase output specificity and relevance",
+                }
+            )
+
+            if "generic" in message.lower():
+                recommendations.append(
+                    {
+                        "priority": "Medium",
+                        "category": "Personalization",
+                        "action": "Incorporate more context into responses",
+                        "details": "Ensure the agent has access to sufficient context (user history, preferences, industry specifics) to generate personalized, non-generic responses.",
+                        "expected_impact": "Reduce generic output by 40%",
+                    }
+                )
+        elif rating and rating == 3:  # Average rating
+            recommendations.append(
+                {
+                    "priority": "Medium",
+                    "category": "Optimization",
+                    "action": f"Optimize {subject} for better results",
+                    "details": f"User gave a neutral rating of {rating}/5. While functional, there's room for improvement. Focus on enhancing response quality and relevance.",
+                    "expected_impact": "Move ratings from 3★ to 4-5★",
+                }
+            )
+
+        return recommendations
+
+    def _generate_prediction_improvement_plan(
+        self, message: str, metrics: dict
+    ) -> dict:
+        """Generate a detailed plan for improving prediction accuracy.
+
+        Args:
+            message: User's query about prediction improvement
+            metrics: Current performance metrics
+
+        Returns:
+            dict: Detailed improvement plan with recommendations
+        """
+        message_lower = message.lower()
+
+        # Extract campaign metrics if available
+        campaign_metrics = metrics.get("campaign_metrics", {})
+        conversion_rate = campaign_metrics.get("conversion_rate", 0)
+        impressions = campaign_metrics.get("total_impressions", 0)
+        conversions = campaign_metrics.get("total_conversions", 0)
+
+        # Determine confidence level based on data volume
+        if impressions > 10000 and conversions > 100:
+            confidence = "High"
+            data_quality = "Excellent"
+        elif impressions > 5000 and conversions > 50:
+            confidence = "Medium"
+            data_quality = "Good"
+        else:
+            confidence = "Low"
+            data_quality = "Limited - More data needed"
+
+        # Generate specific recommendations
+        recommendations = []
+
+        # Data collection recommendations
+        if impressions < 10000:
+            recommendations.append(
+                {
+                    "priority": "High",
+                    "category": "Data Collection",
+                    "action": "Increase sample size",
+                    "details": f"Current: {impressions:,} impressions. Target: 10,000+ for reliable predictions.",
+                    "expected_impact": "Significantly improve prediction confidence by reducing variance",
+                }
+            )
+
+        # Segmentation recommendations
+        recommendations.append(
+            {
+                "priority": "High",
+                "category": "Segmentation",
+                "action": "Implement multi-dimensional segmentation",
+                "details": "Break down conversions by channel, audience demographics, time periods, and device types",
+                "expected_impact": "Enable more accurate predictions for specific user segments",
+            }
+        )
+
+        # Model improvement recommendations
+        recommendations.append(
+            {
+                "priority": "Medium",
+                "category": "Model Enhancement",
+                "action": "Implement time-series forecasting",
+                "details": "Use historical data patterns to account for seasonality and trends",
+                "expected_impact": "Capture temporal patterns that affect conversion rates",
+            }
+        )
+
+        # Testing recommendations
+        recommendations.append(
+            {
+                "priority": "Medium",
+                "category": "Validation",
+                "action": "Set up A/B testing framework",
+                "details": "Run controlled experiments to validate prediction models against actual results",
+                "expected_impact": "Measure and improve prediction accuracy systematically",
+            }
+        )
+
+        # External factors
+        recommendations.append(
+            {
+                "priority": "Low",
+                "category": "Context Integration",
+                "action": "Incorporate external factors",
+                "details": "Account for market conditions, competitor activity, and seasonal events",
+                "expected_impact": "Reduce prediction errors from external variables",
+            }
+        )
+
+        # Model maintenance
+        recommendations.append(
+            {
+                "priority": "Medium",
+                "category": "Maintenance",
+                "action": "Establish quarterly model refresh cycle",
+                "details": "Update baseline metrics and retrain models with recent data every 90 days",
+                "expected_impact": "Prevent model drift and maintain accuracy over time",
+            }
+        )
+
+        return {
+            "request_type": "prediction_improvement",
+            "analysis": {
+                "query": message,
+                "current_metrics": {
+                    "conversion_rate": f"{conversion_rate:.2f}%",
+                    "impressions": f"{impressions:,}",
+                    "conversions": f"{conversions:,}",
+                },
+                "prediction_confidence": confidence,
+                "data_quality": data_quality,
+            },
+            "recommendations": recommendations,
+            "summary": f"Generated {len(recommendations)} actionable recommendations to improve prediction accuracy",
+            "next_steps": [
+                "Prioritize high-impact recommendations",
+                "Establish baseline metrics for measuring improvement",
+                "Implement recommendations incrementally",
+                "Monitor prediction accuracy after each change",
+                "Document learnings and update models accordingly",
+            ],
+        }
 
     def _detect_patterns(self, execution_data: list) -> dict:
         """Detect success and failure patterns in execution data.

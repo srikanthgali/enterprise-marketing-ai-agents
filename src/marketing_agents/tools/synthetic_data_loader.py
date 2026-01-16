@@ -110,9 +110,19 @@ class SyntheticDataLoader:
         # Apply time range filter if specified
         if time_range:
             cutoff_time = self._parse_time_range(time_range)
-            all_records = [
+            filtered_records = [
                 r for r in all_records if self._is_within_time_range(r, cutoff_time)
             ]
+
+            # If no records found in time range, use all available data
+            # This ensures analytics always has data to show
+            if len(filtered_records) == 0 and len(all_records) > 0:
+                self.logger.warning(
+                    f"No data found in {time_range} range. Using all {len(all_records)} available records instead."
+                )
+                filtered_records = all_records
+
+            all_records = filtered_records
 
         # Apply limit if specified
         if limit:

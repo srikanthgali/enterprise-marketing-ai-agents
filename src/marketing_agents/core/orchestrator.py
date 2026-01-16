@@ -379,6 +379,27 @@ class OrchestratorAgent(BaseAgent):
             state.get("handoff_required") and state.get("target_agent") == agent_id
         )
 
+        # If this is a handoff, mark the input data to prevent infinite loops
+        if was_handoff_target:
+            # Use current_agent (the agent that initiated the handoff) as from_agent
+            from_agent_id = state.get("current_agent")
+            if from_agent_id:
+                # Add marker to task_data to indicate this is a handoff result
+                if isinstance(state["task_data"], dict):
+                    state["task_data"]["from_agent"] = from_agent_id
+                    self.logger.info(
+                        f"Marked task_data with from_agent={from_agent_id} for handoff to {agent_id}"
+                    )
+                else:
+                    # If task_data is not a dict, wrap it
+                    self.logger.warning(
+                        f"task_data is not a dict: {type(state['task_data'])}"
+                    )
+            else:
+                self.logger.warning(
+                    f"Cannot mark from_agent for handoff to {agent_id}: current_agent is None"
+                )
+
         try:
             # Execute agent with task data
             result = await agent.process(state["task_data"])

@@ -300,6 +300,10 @@ class WorkflowGraphBuilder:
             "model_tuning",
             "optimization",
             "learning",
+            "feedback_learning",
+            "analyze_feedback",
+            "prediction_improvement",
+            "detect_patterns",
         ]:
             self.logger.info(f"Routing to feedback_learning for task: {task_type}")
             return "feedback_learning"

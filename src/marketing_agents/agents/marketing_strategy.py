@@ -175,8 +175,19 @@ class MarketingStrategyAgent(BaseAgent):
                 result = await self._create_campaign_strategy(input_data)
 
             # Check if handoff is needed
+            # Only handoff if the result explicitly indicates a need
+            # But skip if we're already handling a handoff to prevent loops
             message = input_data.get("message", "")
-            handoff_info = self._detect_handoff_need(message, result)
+            is_handoff_result = input_data.get("from_agent") is not None
+
+            if is_handoff_result:
+                self.logger.info(
+                    f"Processing handoff from {input_data.get('from_agent')}. "
+                    "Completing strategy without further handoffs."
+                )
+                handoff_info = {}
+            else:
+                handoff_info = self._detect_handoff_need(message, result)
 
             # Log execution
             duration = (datetime.utcnow() - start_time).total_seconds()

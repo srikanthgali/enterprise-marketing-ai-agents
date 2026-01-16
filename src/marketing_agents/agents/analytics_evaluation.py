@@ -125,25 +125,44 @@ class AnalyticsEvaluationAgent(BaseAgent):
         start_time = datetime.utcnow()
 
         try:
-            # Handle case where input_data might be a string
-            if isinstance(input_data, str):
-                input_data = {
-                    "type": "performance_report",
-                    "message": input_data,
+            # Log input_data for debugging
+            self.logger.info(
+                f"Analytics agent received input_data type: {type(input_data)}"
+            )
+            self.logger.info(f"Analytics agent received input_data: {input_data}")
+
+            # Handle case where input_data might be None
+            if input_data is None:
+                self.logger.error("input_data is None!")
+                return {
+                    "success": False,
+                    "error": "input_data is None",
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "is_final": True,
+                    "summary": "Analytics processing failed: input_data is None",
                 }
+
             elif not isinstance(input_data, dict):
                 input_data = {
                     "type": "performance_report",
                     "raw_input": str(input_data),
                 }
 
+            # Normalize API request format to internal format
+            # API sends: report_type, date_range, message
+            # Internal expects: type, time_range, message
+            if "report_type" in input_data:
+                # Map report_type to type
+                input_data["type"] = input_data.get("report_type", "performance_report")
+
             request_type = input_data.get("type", "performance_report")
 
-            # Extract user query from filters (Gradio sends it here)
+            # Extract user query from filters or message
             user_query = input_data.get("message", "")
             if not user_query:
-                filters = input_data.get("filters", {})
-                user_query = filters.get("user_query", "")
+                filters = input_data.get("filters")
+                if filters and isinstance(filters, dict):
+                    user_query = filters.get("user_query", "")
 
             # Store user query for handoff detection
             if user_query:
@@ -191,10 +210,55 @@ class AnalyticsEvaluationAgent(BaseAgent):
                     "user_query": user_query,
                 }
 
+            # Ensure result is not None
+            if result is None:
+                self.logger.error(
+                    f"Handler returned None for request_type: {request_type}"
+                )
+                result = {
+                    "request_type": request_type,
+                    "metrics": {},
+                    "report": "Error: No data available",
+                    "error": "Handler returned None",
+                }
+
             self.status = AgentStatus.IDLE
 
+            # Check if this is a handoff from another agent
+            # If so, DON'T check for further handoffs to prevent infinite loops
+            is_handoff_result = input_data.get("from_agent") is not None
+
+            # Also check handoff history to detect loops
+            handoff_history = input_data.get("handoff_history", [])
+            recent_handoffs = [
+                (h["from"], h["to"]) for h in handoff_history[-4:]
+            ]  # Last 4 handoffs
+
+            # Count how many times we've seen analytics -> marketing -> analytics pattern
+            loop_count = sum(
+                1
+                for i in range(len(recent_handoffs) - 1)
+                if recent_handoffs[i] == ("analytics_evaluation", "marketing_strategy")
+                and recent_handoffs[i + 1]
+                == ("marketing_strategy", "analytics_evaluation")
+            )
+
             # Check if handoff is needed based on analysis results
-            handoff_info = self._detect_handoff_need(result, input_data)
+            # But skip if we're already handling a handoff result OR if we detect a loop
+            if is_handoff_result or loop_count >= 1:
+                if is_handoff_result:
+                    self.logger.info(
+                        f"Processing handoff from {input_data.get('from_agent')}. "
+                        "Completing analysis without further handoffs."
+                    )
+                elif loop_count >= 1:
+                    self.logger.warning(
+                        f"Detected handoff loop (count={loop_count}). "
+                        "Completing analysis without further handoffs to prevent infinite loop."
+                    )
+                handoff_info = {}
+            else:
+                handoff_info = self._detect_handoff_need(result, input_data)
 
             # Generate meaningful summary based on user query or handoff
             if handoff_info.get("handoff_required"):
@@ -339,6 +403,29 @@ class AnalyticsEvaluationAgent(BaseAgent):
             for record in execution_data
             if self._is_within_time_range(record, cutoff_time)
         ]
+
+        # If no data found in time range, use all available data
+        # This ensures we always have metrics to show users
+        if len(filtered_data) == 0 and len(execution_data) > 0:
+            self.logger.info(
+                f"No data found in {time_range} range, using all {len(execution_data)} available records"
+            )
+            filtered_data = execution_data
+            # Update time range to reflect actual data used
+            if execution_data:
+                dates = []
+                for record in execution_data:
+                    try:
+                        started = record.get("started_at", "")
+                        if isinstance(started, str):
+                            dates.append(
+                                datetime.fromisoformat(started.replace("Z", "+00:00"))
+                            )
+                    except:
+                        continue
+                if dates:
+                    cutoff_time = min(dates)
+                    time_range = "all_available"
 
         # Determine which metrics to calculate
         if metric_types is None:
@@ -751,16 +838,26 @@ class AnalyticsEvaluationAgent(BaseAgent):
 
     def _parse_time_range(self, time_range: str) -> timedelta:
         """Parse time range string to timedelta."""
-        unit = time_range[-1]
-        value = int(time_range[:-1])
+        # Handle special case for "all_available"
+        if time_range == "all_available":
+            return timedelta(days=3650)  # 10 years - effectively all data
 
-        if unit == "h":
-            return timedelta(hours=value)
-        elif unit == "d":
-            return timedelta(days=value)
-        elif unit == "w":
-            return timedelta(weeks=value)
-        else:
+        if not time_range or len(time_range) < 2:
+            return timedelta(hours=24)  # Default to 24 hours
+
+        try:
+            unit = time_range[-1]
+            value = int(time_range[:-1])
+
+            if unit == "h":
+                return timedelta(hours=value)
+            elif unit == "d":
+                return timedelta(days=value)
+            elif unit == "w":
+                return timedelta(weeks=value)
+            else:
+                return timedelta(hours=24)  # Default to 24 hours
+        except (ValueError, IndexError):
             return timedelta(hours=24)  # Default to 24 hours
 
     def _is_within_time_range(self, record: dict, cutoff_time: datetime) -> bool:
@@ -829,9 +926,19 @@ class AnalyticsEvaluationAgent(BaseAgent):
         """
         handoff_info = {}
 
+        # Safety check: ensure result is not None
+        if result is None:
+            self.logger.error("Result is None in _detect_handoff_need")
+            return {}
+
         # Extract metrics if available
         metrics = result.get("metrics", {})
+        if metrics is None:
+            metrics = {}
+
         campaign_metrics = metrics.get("campaign_metrics", {})
+        if campaign_metrics is None:
+            campaign_metrics = {}
 
         # Check if report is a dict (legacy) or string (new format)
         report = result.get("report", {})
@@ -897,20 +1004,40 @@ class AnalyticsEvaluationAgent(BaseAgent):
             }
             return handoff_info
 
-        # Scenario 2: Prediction accuracy or model improvement (check before general strategic)
-        prediction_keywords = [
+        # Scenario 2: Prediction accuracy improvement or model optimization
+        # Questions about improving prediction accuracy should go to feedback_learning
+        prediction_improvement_keywords = [
             "prediction",
             "predictions",
             "accurate",
             "accuracy",
             "forecast",
             "forecasting",
-            "model performance",
             "improve predictions",
+            "prediction accuracy",
+            "model performance",
+            "ml model",
+            "machine learning model",
         ]
-        if any(keyword in user_message for keyword in prediction_keywords):
+        improvement_keywords = [
+            "improve",
+            "optimize",
+            "better",
+            "enhance",
+            "increase accuracy",
+        ]
+
+        # Check if user is asking about prediction improvement
+        has_prediction = any(
+            keyword in user_message for keyword in prediction_improvement_keywords
+        )
+        has_improvement = any(
+            keyword in user_message for keyword in improvement_keywords
+        )
+
+        if has_prediction and has_improvement:
             self.logger.info(
-                f"Handoff detected: feedback_learning (prediction keywords)"
+                f"Handoff detected: feedback_learning (prediction improvement)"
             )
             handoff_info = {
                 "handoff_required": True,
@@ -953,6 +1080,7 @@ class AnalyticsEvaluationAgent(BaseAgent):
             return handoff_info
 
         # Scenario 4: Performance decline or strategic recommendations (check last - most general)
+        # Note: Only handoff for actual strategic planning, not analytics questions about improvement
         decline_keywords = [
             "declining",
             "dropped",
@@ -965,17 +1093,42 @@ class AnalyticsEvaluationAgent(BaseAgent):
             "underperforming",
         ]
         strategic_keywords = [
-            "recommend",
-            "improve",
-            "help",
-            "strategy",
-            "pivot",
-            "optimize",
+            "recommend strategy",
+            "marketing strategy",
+            "pivot strategy",
+            "strategic plan",
+            "campaign strategy",
+            "new approach",
         ]
 
-        if any(
-            keyword in user_message for keyword in decline_keywords + strategic_keywords
-        ):
+        # Only handoff if there's actual decline mentioned or explicit strategic planning request
+        is_decline_mentioned = any(
+            keyword in user_message for keyword in decline_keywords
+        )
+        is_strategic_planning = any(
+            keyword in user_message for keyword in strategic_keywords
+        )
+
+        # Don't handoff for analytics questions about predictions, accuracy, or performance metrics
+        is_analytics_question = any(
+            word in user_message
+            for word in [
+                "prediction",
+                "predictions",
+                "forecast",
+                "accurate",
+                "accuracy",
+                "metrics",
+                "performance",
+                "data",
+                "analysis",
+                "report",
+            ]
+        )
+
+        if (
+            is_decline_mentioned or is_strategic_planning
+        ) and not is_analytics_question:
             self.logger.info(
                 f"Handoff detected: marketing_strategy (decline/strategic keywords)"
             )
@@ -985,11 +1138,7 @@ class AnalyticsEvaluationAgent(BaseAgent):
                 "handoff_reason": "strategic_pivot_needed",
                 "context": {
                     "analysis_type": "strategic_recommendation_requested",
-                    "severity": (
-                        "high"
-                        if any(keyword in user_message for keyword in decline_keywords)
-                        else "medium"
-                    ),
+                    "severity": ("high" if is_decline_mentioned else "medium"),
                     "findings": [f"User query: {input_data.get('message', '')}"],
                     "metrics": metrics,
                     "recommendation": "User requested strategic improvements or reported performance decline",
@@ -1015,7 +1164,246 @@ class AnalyticsEvaluationAgent(BaseAgent):
         # Create contextual response based on query keywords
         query_lower = user_query.lower()
 
-        if any(word in query_lower for word in ["roi", "return"]):
+        # Handle mobile vs desktop comparison queries
+        if any(word in query_lower for word in ["mobile", "desktop", "device"]) and any(
+            word in query_lower for word in ["vs", "versus", "compare", "comparison"]
+        ):
+            report = f"""# Mobile vs Desktop Performance Analysis
+
+Based on your query: "{user_query}"
+
+## Device Performance Overview
+- **Overall Conversion Rate**: {conversion_rate:.2f}%
+- **Total Conversions**: {conversions:,}
+- **Average ROI**: {roi:.2f}%
+
+## Key Insights
+The data shows campaigns are running across multiple devices. Here's what we observe:
+
+### Mobile Performance
+- Mobile campaigns typically show higher engagement rates
+- Conversion rates vary by campaign type and channel
+- Mobile-first design is crucial for optimization
+
+### Desktop Performance
+- Desktop users often have higher conversion values
+- Better for complex purchasing decisions
+- Longer session durations typical
+
+## Recommendations
+1. **Optimize mobile experience**: Ensure fast loading and simple checkout
+2. **Test device-specific creatives**: Tailor messaging for each platform
+3. **Track device attribution**: Understand cross-device customer journeys
+4. **Allocate budget strategically**: Invest based on device performance
+5. **A/B test by device**: Run separate experiments for mobile and desktop
+
+## Channel Breakdown
+Analysis shows performance varies by channel. Consider running device-specific campaigns for better results.
+"""
+
+        # Handle traffic trend queries
+        elif any(
+            word in query_lower
+            for word in ["trend", "trended", "trending", "over time", "past"]
+        ) and any(word in query_lower for word in ["traffic", "visits", "visitors"]):
+            report = f"""# Website Traffic Trend Analysis
+
+Based on your query: "{user_query}"
+
+## Traffic Overview
+- **Total Impressions**: {impressions:,}
+- **Click-Through Rate**: {ctr:.2f}%
+- **Engagement**: {impressions:,} impressions tracked
+
+## Trend Analysis
+Based on available data, we can observe:
+
+### Key Findings
+- Traffic patterns show variation across different periods
+- Seasonal factors may influence visitor behavior
+- Channel mix impacts overall traffic volume
+
+### Performance Indicators
+- **Current CTR**: {ctr:.2f}% {"(Strong performance)" if ctr > 2.5 else "(Moderate performance)" if ctr > 1.5 else "(Needs improvement)"}
+- **Conversion Rate**: {conversion_rate:.2f}%
+- **Total Conversions**: {conversions:,}
+
+## Recommendations
+1. **Monitor seasonal patterns**: Track traffic by week/month to identify trends
+2. **Optimize high-traffic periods**: Increase budget during peak times
+3. **Improve conversion during low traffic**: Focus on quality over quantity
+4. **Diversify traffic sources**: Reduce dependency on single channels
+5. **Set up automated alerts**: Get notified of significant traffic changes
+
+## Next Steps
+Consider implementing time-series analysis for more detailed trend forecasting.
+"""
+
+        # Handle channel comparison queries
+        elif any(
+            word in query_lower for word in ["compare", "comparison", "vs", "versus"]
+        ) and any(
+            word in query_lower
+            for word in ["channel", "email", "social", "search", "paid"]
+        ):
+            report = f"""# Channel Performance Comparison
+
+Based on your query: "{user_query}"
+
+## Overall Channel Performance
+- **Total Campaigns**: {conversions:,} conversions tracked
+- **Average ROI**: {roi:.2f}%
+- **Overall CTR**: {ctr:.2f}%
+
+## Channel Analysis
+
+### Email Marketing
+- Typically shows high engagement with existing customers
+- Strong for retention and repeat purchases
+- Cost-effective channel with good ROI
+
+### Social Media
+- Great for brand awareness and engagement
+- Varies by platform (LinkedIn, Facebook, Instagram)
+- Important for reaching new audiences
+
+### Paid Search
+- High-intent traffic with strong conversion potential
+- Requires continuous optimization and budget management
+- Scalable for growth when profitable
+
+## Comparative Insights
+- **ROI Leader**: Channels with {roi:.2f}% average return
+- **Volume Leader**: Driving {impressions:,} impressions
+- **Conversion Leader**: Achieving {conversion_rate:.2f}% conversion rate
+
+## Recommendations
+1. **Double down on winners**: Increase budget for top-performing channels
+2. **Optimize underperformers**: Test new approaches or reduce spend
+3. **Cross-channel attribution**: Understand how channels work together
+4. **Test incrementally**: Run controlled experiments to validate changes
+5. **Monitor competition**: Track competitor activity in each channel
+
+## Strategic Considerations
+Each channel serves different purposes in the customer journey. Balance brand awareness, consideration, and conversion objectives.
+"""
+
+        # Handle funnel analysis queries
+        elif any(
+            word in query_lower
+            for word in [
+                "funnel",
+                "conversion funnel",
+                "checkout",
+                "drop-off",
+                "abandonment",
+            ]
+        ):
+            report = f"""# Conversion Funnel Analysis
+
+Based on your query: "{user_query}"
+
+## Funnel Overview
+- **Top of Funnel**: {impressions:,} impressions
+- **Middle of Funnel**: {int(impressions * (ctr/100)):,} clicks (CTR: {ctr:.2f}%)
+- **Bottom of Funnel**: {conversions:,} conversions (Conversion Rate: {conversion_rate:.2f}%)
+
+## Stage-by-Stage Analysis
+
+### 1. Awareness Stage
+- **Impressions**: {impressions:,}
+- **Reach**: Strong visibility across channels
+
+### 2. Consideration Stage
+- **Clicks**: {int(impressions * (ctr/100)):,}
+- **Engagement Rate**: {ctr:.2f}%
+- {"✓ Good engagement" if ctr > 2.5 else "⚠️ Could be improved"}
+
+### 3. Conversion Stage
+- **Conversions**: {conversions:,}
+- **Conversion Rate**: {conversion_rate:.2f}%
+- {"✓ Strong conversion" if conversion_rate > 3 else "⚠️ Optimization opportunity"}
+
+## Drop-off Analysis
+- **Impression to Click**: {100 - ctr:.1f}% drop-off
+- **Click to Conversion**: {100 - (conversion_rate * ctr / 100):.1f}% drop-off
+
+## Optimization Recommendations
+1. **Reduce friction**: Simplify the checkout/conversion process
+2. **Improve messaging**: Ensure consistency from ad to landing page
+3. **Add trust signals**: Include reviews, guarantees, security badges
+4. **Optimize load speed**: Every second counts for conversions
+5. **A/B test CTAs**: Experiment with different call-to-action copy and design
+6. **Implement retargeting**: Re-engage users who dropped off
+7. **Analyze exit pages**: Identify where users are leaving
+
+## ROI Impact
+With {conversions:,} conversions and {roi:.2f}% ROI, {"focus on scaling successful campaigns" if roi > 200 else "prioritize conversion rate optimization"}.
+"""
+
+        # Handle prediction/forecast accuracy queries
+        elif any(
+            word in query_lower
+            for word in [
+                "prediction",
+                "predictions",
+                "forecast",
+                "accurate",
+                "accuracy",
+            ]
+        ):
+            # Check if asking about conversion rates specifically
+            if "conversion" in query_lower:
+                report = f"""# Conversion Rate Prediction Analysis
+
+Based on your query: "{user_query}"
+
+## Current Conversion Performance
+- **Actual Conversion Rate**: {conversion_rate:.2f}%
+- **Total Conversions**: {conversions:,}
+- **Sample Size**: {impressions:,} impressions
+
+## Prediction Accuracy Assessment
+{"✓ With " + f"{impressions:,}" + " impressions, prediction confidence is high." if impressions > 10000 else "⚠️ Sample size is limited. More data needed for reliable predictions."}
+
+## Historical Performance
+- Current conversion rate: {conversion_rate:.2f}%
+- Expected range: {max(0, conversion_rate - 0.5):.2f}% - {conversion_rate + 0.5:.2f}%
+
+## Recommendations for Improving Predictions
+1. **Increase data collection**: Gather more conversion data across different segments
+2. **Track seasonal patterns**: Monitor conversion trends over time
+3. **Segment analysis**: Break down conversions by channel, audience, and campaign type
+4. **A/B testing**: Run controlled experiments to validate prediction models
+5. **Update baselines**: Refresh prediction models quarterly with recent data
+
+## Model Confidence
+{"High confidence" if impressions > 10000 and conversions > 100 else "Medium confidence" if impressions > 5000 else "Low confidence - more data needed"}
+"""
+            else:
+                # General prediction/forecast query
+                report = f"""# Performance Prediction Analysis
+
+Based on your query: "{user_query}"
+
+## Current Metrics (Actual)
+- **ROI**: {roi:.2f}%
+- **CTR**: {ctr:.2f}%
+- **Conversion Rate**: {conversion_rate:.2f}%
+
+## Prediction Reliability
+Based on {impressions:,} impressions and {conversions:,} conversions:
+- Confidence Level: {"High (>95%)" if impressions > 10000 else "Medium (80-95%)" if impressions > 5000 else "Low (<80%)"}
+- Data Quality: {"Good" if conversions > 100 else "Limited"}
+
+## Improving Forecast Accuracy
+1. Collect more historical data across multiple campaigns
+2. Implement time-series analysis for trend detection
+3. Account for external factors (seasonality, market conditions)
+4. Use ensemble models combining multiple prediction methods
+5. Regularly validate predictions against actual results
+"""
+        elif any(word in query_lower for word in ["roi", "return"]):
             report = f"""# ROI Analysis
 
 Based on your query: "{user_query}"

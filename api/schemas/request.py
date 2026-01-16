@@ -133,6 +133,9 @@ class AnalyticsRequest(BaseModel):
         description="Date range for the report",
         example={"start": "2026-01-01", "end": "2026-01-31"},
     )
+    message: Optional[str] = Field(
+        None, description="Natural language query about the data"
+    )
     metrics: Optional[List[str]] = Field(
         None, description="Specific metrics to include"
     )
@@ -165,5 +168,57 @@ class AnalyticsRequest(BaseModel):
                 "date_range": {"start": "2026-01-01", "end": "2026-01-31"},
                 "metrics": ["ctr", "conversions", "roi"],
                 "format": "json",
+            }
+        }
+
+
+class FeedbackLearningRequest(BaseModel):
+    """Request model for feedback learning workflow."""
+
+    message: str = Field(
+        ..., description="Feedback or learning request message", min_length=1
+    )
+    request_type: Optional[str] = Field(
+        "analyze_feedback", description="Type of learning request"
+    )
+    time_range: Optional[str] = Field(
+        "last_7_days", description="Time range for feedback analysis"
+    )
+    agent_id: Optional[str] = Field(
+        None, description="Specific agent to analyze (if applicable)"
+    )
+    context: Optional[Dict[str, Any]] = Field(
+        None, description="Additional context for the learning request"
+    )
+
+    @validator("request_type")
+    def validate_request_type(cls, v):
+        """Validate request type."""
+        valid = [
+            "analyze_feedback",
+            "optimize_agent",
+            "track_experiment",
+            "detect_patterns",
+            "prediction_improvement",
+        ]
+        if v not in valid:
+            raise ValueError(f"Request type must be one of {valid}")
+        return v
+
+    @validator("time_range")
+    def validate_time_range(cls, v):
+        """Validate time range."""
+        valid = ["last_24h", "last_7_days", "last_30_days", "all"]
+        if v not in valid:
+            raise ValueError(f"Time range must be one of {valid}")
+        return v
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "message": "Rate the quality of the campaign strategy: 2/5 stars. It was too generic.",
+                "request_type": "analyze_feedback",
+                "time_range": "last_7_days",
+                "context": {"source": "user_rating", "rating": 2},
             }
         }

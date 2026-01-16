@@ -13,6 +13,7 @@ from api.schemas.request import (
     CampaignLaunchRequest,
     CustomerSupportRequest,
     AnalyticsRequest,
+    FeedbackLearningRequest,
 )
 from api.schemas.response import (
     WorkflowStatusResponse,
@@ -79,11 +80,23 @@ async def execute_workflow_async(
 
         # Extract agents_executed from execution_summary
         agents_executed = []
+        state_transitions = []
         if result.get("execution_summary"):
             execution_summary = result["execution_summary"]
             # Get agents_executed directly from execution_summary
             # (get_execution_summary already extracts them)
             agents_executed = execution_summary.get("agents_executed", [])
+
+            # Build state_transitions from execution_history for analytics
+            execution_history = execution_summary.get("execution_history", [])
+            for record in execution_history:
+                state_transitions.append(
+                    {
+                        "agent_name": record.get("agent_id", "unknown"),
+                        "timestamp": record.get("started_at"),
+                        "status": record.get("status", "unknown"),
+                    }
+                )
 
         # Calculate progress (100% when completed)
         progress = 1.0
@@ -95,6 +108,7 @@ async def execute_workflow_async(
                 "completed_at": datetime.now(),
                 "result": result,
                 "agents_executed": agents_executed,
+                "state_transitions": state_transitions,
                 "progress": progress,
                 "current_agent": None,
                 "error": None,
@@ -150,6 +164,7 @@ async def launch_campaign(
         "completed_at": None,
         "estimated_completion": datetime.now() + timedelta(minutes=timeout_minutes),
         "agents_executed": [],
+        "state_transitions": [],
         "error": None,
         "request_data": request.dict(),
         "config": workflow_config,
@@ -213,6 +228,7 @@ async def handle_support_inquiry(
         "completed_at": None,
         "estimated_completion": datetime.now() + timedelta(minutes=2),
         "agents_executed": [],
+        "state_transitions": [],
         "error": None,
         "request_data": request.dict(),
     }
@@ -275,6 +291,7 @@ async def generate_analytics_report(
         "completed_at": None,
         "estimated_completion": datetime.now() + timedelta(minutes=3),
         "agents_executed": [],
+        "state_transitions": [],
         "error": None,
         "request_data": request.dict(),
     }
@@ -298,6 +315,70 @@ async def generate_analytics_report(
         started_at=datetime.now(),
         completed_at=None,
         estimated_completion=datetime.now() + timedelta(minutes=3),
+        agents_executed=[],
+        error=None,
+    )
+
+
+@router.post("/feedback-learning", response_model=WorkflowStatusResponse)
+async def process_feedback_learning(
+    request: FeedbackLearningRequest,
+    background_tasks: BackgroundTasks,
+    orchestrator=Depends(get_orchestrator),
+    memory_manager=Depends(get_memory_manager),
+):
+    """
+    Process feedback and learning workflow.
+
+    This workflow uses the Feedback Learning Agent to:
+    - Collect and analyze feedback from users and agents
+    - Identify patterns and improvement opportunities
+    - Generate recommendations for system optimization
+    - Investigate recurring issues
+
+    Args:
+        request: Feedback learning request
+
+    Returns:
+        Workflow status with workflow_id for tracking
+    """
+    workflow_id = f"wf_{uuid.uuid4().hex[:12]}"
+
+    # Initialize workflow state
+    workflow_states[workflow_id] = {
+        "workflow_id": workflow_id,
+        "workflow_type": "feedback_learning",
+        "status": "pending",
+        "current_agent": None,
+        "progress": 0.0,
+        "started_at": None,
+        "completed_at": None,
+        "estimated_completion": datetime.now() + timedelta(minutes=2),
+        "agents_executed": [],
+        "state_transitions": [],
+        "error": None,
+        "request_data": request.dict(),
+    }
+
+    # Start workflow in background
+    background_tasks.add_task(
+        execute_workflow_async,
+        workflow_id,
+        "feedback_learning",
+        request.dict(),
+        orchestrator,
+        memory_manager,
+    )
+
+    return WorkflowStatusResponse(
+        workflow_id=workflow_id,
+        workflow_type="feedback_learning",
+        status="pending",
+        current_agent=None,
+        progress=0.0,
+        started_at=datetime.now(),
+        completed_at=None,
+        estimated_completion=datetime.now() + timedelta(minutes=2),
         agents_executed=[],
         error=None,
     )
@@ -345,6 +426,7 @@ async def list_workflows(
             "completed_at": state.get("completed_at"),
             "estimated_completion": state.get("estimated_completion"),
             "agents_executed": state.get("agents_executed", []),
+            "state_transitions": state.get("state_transitions", []),
             "error": state.get("error"),
         }
 

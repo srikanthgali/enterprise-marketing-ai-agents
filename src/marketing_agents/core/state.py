@@ -389,4 +389,5 @@ def get_execution_summary(state: AgentState) -> Dict[str, Any]:
         "total_retries": state["retry_count"],
         "has_error": state["error"] is not None,
         "is_complete": check_workflow_complete(state),
+        "execution_history": state["execution_history"],
     }
