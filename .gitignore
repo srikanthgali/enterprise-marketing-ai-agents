@@ -223,9 +223,8 @@ logs/*.log
 .github/*
 
 # Docs
-docs/
-docs/*/*/
-docs/*/*/*/
+docs/*/*
+
 
 # macOS
 .DS_Store
