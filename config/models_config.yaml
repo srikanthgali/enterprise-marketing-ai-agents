@@ -10,7 +10,7 @@ openai:
     top_p: 1.0
     frequency_penalty: 0.0
     presence_penalty: 0.0
-    use_case: "Most cost-effective for portfolio projects"
+    use_case: "Most cost-effective option for development"
 
   gpt-3.5-turbo:
     temperature: 0.6
@@ -72,7 +72,7 @@ anthropic:
     temperature: 0.7
     max_tokens: 4096
 
-# Default Model Settings (Optimized for Portfolio/Cost)
+# Default Model Settings (Optimized for Development/Cost)
 defaults:
   chat_model: "gpt-4o-mini"  # Most cost-effective option
   embedding_model: "text-embedding-3-small"  # Already cost-optimized

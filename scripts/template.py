@@ -32,7 +32,7 @@ class MarketingAgentsProjectGenerator:
 
     This generator creates a professional, modular project layout demonstrating
     production-ready patterns for multi-agent systems. Designed to showcase
-    advanced AI engineering skills in technical interviews and portfolio reviews.
+    advanced AI engineering skills.
 
     Attributes:
         project_name (str): Name of the project
@@ -310,7 +310,7 @@ class MarketingAgentsProjectGenerator:
             "new_items_created": self.created_count,
             "timestamp": datetime.now().isoformat(),
             "status": "Enterprise-grade multi-agent marketing AI system",
-            "portfolio_quality": "Production-ready architecture for interviews",
+            "quality": "Production-ready architecture",
             "key_features": [
                 "Multi-agent orchestration (Content, SEO, Copywriter, Campaign Manager)",
                 "Agent handoff and message bus architecture",
@@ -363,7 +363,7 @@ if __name__ == "__main__":
         print(f"Location: {summary['base_path']}")
         print(f"Items Created: {summary['new_items_created']}")
         print(f"Status: {summary['status']}")
-        print(f"Quality: {summary['portfolio_quality']}")
+        print(f"Quality: {summary['quality']}")
         print("\n🤖 AI Agents:")
         for agent in summary["agents"]:
             print(f"   ✓ {agent}")

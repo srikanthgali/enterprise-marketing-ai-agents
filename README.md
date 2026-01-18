@@ -1,6 +1,6 @@
 # Enterprise Marketing AI Agents
 
-A **portfolio-grade, enterprise-ready multi-agent AI system** for marketing automation and orchestration. This project demonstrates production-level architecture using **LangGraph StateGraph orchestration**, RAG-powered knowledge retrieval, explicit agent handoffs, and continuous learning capabilities.
+An **enterprise-ready multi-agent AI system** for marketing automation and orchestration. This project demonstrates production-level architecture using **LangGraph StateGraph orchestration**, RAG-powered knowledge retrieval, explicit agent handoffs, and continuous learning capabilities.
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -216,108 +216,84 @@ Continuously improves the system through learning from outcomes and pattern dete
 - Validated optimization ready → Orchestrator with configuration updates
 - Agent-specific optimization → Individual agents with recommendations
 
+## 🎥 Demo Video
+
+> **Coming Soon!** A comprehensive video walkthrough demonstrating the multi-agent system in action.
+
+The demo will showcase:
+- LLM-driven intent classification and routing
+- Multi-agent collaboration with handoffs
+- RAG-powered knowledge retrieval
+- Interactive dashboards (Streamlit & Gradio)
+- End-to-end workflow examples
+
+*Video will be available in the [assets](assets/) folder.*
+
+---
+
 ## 📁 Project Structure
 
 ```
 enterprise-marketing-ai-agents/
 ├── src/marketing_agents/          # Core agent system
 │   ├── core/                      # Base classes & orchestration
-│   │   ├── base_agent.py         # Abstract base agent with tool registration
-│   │   ├── orchestrator.py       # Central coordinator agent
-│   │   ├── handoff_manager.py    # Explicit handoff protocol implementation
-│   │   ├── message_bus.py        # Event-driven messaging (pub/sub)
-│   │   ├── prompt_manager.py     # Centralized prompt management
-│   │   ├── state.py              # Agent state management
-│   │   └── graph_builder.py      # LangGraph workflow builder
-│   ├── agents/                    # Specialized agent implementations
-│   │   ├── marketing_strategy.py # Campaign planning & strategy development
-│   │   ├── customer_support.py   # Inquiry handling with RAG
-│   │   ├── analytics_evaluation.py # Performance metrics & insights
-│   │   └── feedback_learning.py  # Continuous improvement & optimization
-│   ├── tools/                     # Agent-specific tools & capabilities
-│   │   ├── marketing_tools.py    # Market research, campaign planning
-│   │   ├── support_tools.py      # Ticket management, sentiment analysis
-│   │   ├── analytics_tools.py    # Metrics calculation, forecasting
-│   │   └── rag_tools.py          # Knowledge base search, retrieval
-│   ├── memory/                    # Multi-tier memory architecture
-│   │   ├── vector_store.py       # FAISS vector store manager
-│   │   ├── short_term_memory.py  # Session-based context
-│   │   ├── long_term_memory.py   # Persistent history storage
-│   │   └── memory_manager.py     # Unified memory coordination
-│   ├── rag/                       # RAG pipeline components
-│   │   ├── chunking.py           # Document chunking strategies
-│   │   ├── embeddings.py         # Embedding generation
-│   │   ├── retriever.py          # Advanced retrieval with reranking
-│   │   ├── ingestion.py          # Document ingestion pipeline
-│   │   └── context_augmenter.py  # Context enhancement
-│   ├── data_extraction/           # Data generation and scraping
-│   │   ├── web_scraper.py        # Stripe docs scraper
-│   │   ├── ticket_generator.py   # Synthetic support tickets
-│   │   ├── campaign_generator.py # Marketing campaign data
-│   │   └── feedback_generator.py # Feedback and interaction data
-│   ├── learning/                  # Continuous learning system
-│   │   ├── feedback_aggregator.py # Feedback collection
-│   │   ├── pattern_detector.py   # Success pattern mining
-│   │   └── optimization_engine.py # System optimization
-│   ├── evaluation/                # Metrics & performance tracking
-│   │   ├── agent_metrics.py      # Agent-specific KPIs
-│   │   ├── rag_metrics.py        # RAG pipeline evaluation
-│   │   └── system_metrics.py     # System-wide performance
-│   └── utils/                     # Helper functions
-│       ├── prompt_loader.py      # System prompt management
-│       ├── state_manager.py      # AgentState utilities
-│       └── logger.py             # Structured logging
+│   │   ├── orchestrator.py       # LangGraph-based coordinator
+│   │   ├── intent_classifier.py  # LLM-driven intent detection
+│   │   ├── handoff_detector.py   # Context-aware handoffs
+│   │   ├── base_agent.py         # Abstract base agent
+│   │   ├── handoff_manager.py    # Handoff protocol
+│   │   ├── message_bus.py        # Event-driven messaging
+│   │   ├── prompt_manager.py     # Prompt management
+│   │   ├── state.py              # State definitions
+│   │   └── graph_builder.py      # Workflow builder
+│   ├── agents/                    # Specialized agents
+│   │   ├── marketing_strategy.py
+│   │   ├── customer_support.py
+│   │   ├── analytics_evaluation.py
+│   │   └── feedback_learning.py
+│   ├── tools/                     # Agent tools
+│   │   ├── kb_search.py          # Knowledge base search
+│   │   ├── sentiment_analysis.py
+│   │   ├── metrics_calculator.py
+│   │   └── web_search.py
+│   ├── memory/                    # Memory systems
+│   ├── rag/                       # RAG pipeline
+│   ├── data_extraction/           # Data generation
+│   ├── learning/                  # Continuous learning
+│   ├── evaluation/                # Performance metrics
+│   └── utils/                     # Utilities
 ├── api/                           # FastAPI REST API
-│   ├── main.py                   # API entry point with async support
-│   ├── routes/                   # Endpoint definitions
-│   │   ├── agents.py             # Agent interaction endpoints
-│   │   ├── campaigns.py          # Campaign management
-│   │   └── analytics.py          # Metrics and reports
+│   ├── main.py                   # API entry point
+│   ├── routes/                   # Endpoints
 │   ├── schemas/                  # Pydantic models
-│   └── middleware/               # Auth, rate limiting, error handling
+│   └── middleware/               # Auth & error handling
 ├── ui/                            # User interfaces
-│   ├── streamlit_app.py          # Interactive dashboard
-│   ├── gradio_app.py             # Conversational chat interface
-│   └── components/               # Reusable UI components
-├── config/                        # Configuration files
-│   ├── agents_config.yaml        # Agent definitions, tools, capabilities
-│   ├── models_config.yaml        # LLM provider configurations
-│   ├── settings.py               # Environment-based settings
-│   └── prompts/                  # System prompts for each agent
-│       ├── orchestrator.txt      # Orchestrator system prompt
-│       ├── marketing_strategy.txt
-│       ├── customer_support.txt
-│       ├── analytics_evaluation.txt
-│       └── feedback_learning.txt
+│   ├── streamlit_app.py          # Dashboard
+│   └── gradio_app.py             # Chat interface
+├── config/                        # Configuration
+│   ├── agents_config.yaml        # Agent definitions
+│   ├── models_config.yaml        # LLM configurations
+│   ├── settings.py               # Settings
+│   └── prompts/                  # System prompts
 ├── data/                          # Data storage
 │   ├── raw/                      # Source data
-│   │   ├── knowledge_base/       # Scraped Stripe documentation
-│   │   ├── support_tickets/      # Synthetic support data
-│   │   ├── marketing_data/       # Campaign performance data
-│   │   └── feedback/             # User feedback logs
-│   ├── embeddings/               # FAISS vector store indexes
-│   ├── processed/                # Cleaned and transformed data
-│   └── reports/                  # Generated reports and analysis
+│   ├── embeddings/               # Vector stores
+│   ├── processed/                # Transformed data
+│   └── reports/                  # Generated reports
 ├── scripts/                       # Utility scripts
-│   ├── run_data_extraction.py    # Web scraping pipeline
-│   ├── initialize_rag_pipeline.py # RAG setup and indexing
-│   ├── run_evaluation.py         # System evaluation suite
-│   └── deploy_agents.py          # Deployment automation
-├── tests/                         # Comprehensive test suite
-│   ├── unit/                     # Unit tests for individual components
-│   ├── integration/              # Multi-agent workflow tests
-│   └── evaluation/               # RAG and agent performance tests
-├── examples/                      # Example scripts and demonstrations
-│   ├── rag_pipeline_integration.py  # RAG pipeline usage examples
-│   ├── memory_management_example.py # Memory system examples
-│   ├── feedback_learning_examples.py # Learning system examples
-│   └── prompt_manager_integration.py # Prompt management examples
-└── docs/                          # Documentation
-    ├── architecture.md           # System architecture overview
-    ├── architecture_detailed.md  # Comprehensive technical spec
-    ├── agents_overview.md        # Agent capabilities reference
-    ├── prompt_management.md      # Prompt engineering guide
-    └── evaluation_framework.md   # Testing and metrics guide
+│   ├── run_data_extraction.py    # Data pipeline
+│   ├── initialize_rag_pipeline.py
+│   └── run_api.py
+├── tests/                         # Test suite
+│   ├── unit/
+│   ├── integration/
+│   └── evaluation/
+├── examples/                      # Example scripts
+├── docs/                          # Documentation
+├── assets/                        # Media files (videos, images)
+├── launch_gradio.py              # Gradio launcher
+├── start_all.sh                  # Start all services
+└── requirements.txt              # Dependencies
 ```
 
 ## 🚀 Quick Start
@@ -938,7 +914,7 @@ models:
       gpt-4o-mini:
         max_tokens: 2048
         temperature: 0.6
-        use_case: "Most cost-effective for portfolio projects"
+        use_case: "Most cost-effective model"
       gpt-3.5-turbo:
         max_tokens: 2048
         temperature: 0.6
