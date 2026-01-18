@@ -5,11 +5,14 @@
 **Production-ready multi-agent system** for marketing automation showcasing advanced AI engineering patterns.
 
 **Key Features:**
-- LangGraph StateGraph orchestration with explicit handoffs
+- LangGraph StateGraph orchestration with LLM-driven handoffs
+- LLM-based intent classification
+- Context-aware handoff detection using GPT-4o-mini
 - RAG pipeline (FAISS + OpenAI embeddings) with Stripe documentation
 - 4 specialized agents with 25+ tools
 - Async execution, session management, comprehensive logging
 - FastAPI REST + Streamlit dashboard + Gradio chat
+- Unified `/api/v1/chat` endpoint with semantic routing
 
 ---
 
@@ -38,8 +41,10 @@
 ## 🤖 Agents
 
 ### Orchestrator (LangGraph)
-**Role:** Central coordinator with conditional routing
-**Routing:** campaign_planning → Marketing | inquiry → Support | analysis → Analytics | optimization → Learning
+**Role:** Central coordinator with LLM-driven intent classification and conditional routing
+**Intent Classification:** Uses GPT-4o-mini to semantically understand user queries and extract entities
+**Routing:** LLM classifies intent → Routes to appropriate agent (Marketing | Support | Analytics | Learning)
+**Handoff Detection:** Each agent uses LLM to determine context-aware handoffs
 
 ### Marketing Strategy
 **Capabilities:** Market research, campaign planning, audience segmentation, budget allocation
@@ -177,11 +182,13 @@ app = workflow.compile()
 
 ## 🎯 Differentiators
 
-1. **Explicit Handoffs** - Predictable, not autonomous
-2. **Production RAG** - Batching, reranking, citations
-3. **Observable** - Comprehensive logging/metrics
-4. **Stateful** - Context preserved across handoffs
-5. **Domain Expertise** - Real knowledge base (Stripe)
+1. **LLM-Driven Routing** - Semantic intent classification
+2. **Context-Aware Handoffs** - LLM reasoning for agent transitions
+3. **Production RAG** - Batching, reranking, citations
+4. **Observable** - Comprehensive logging/metrics
+5. **Stateful** - Context preserved across handoffs
+6. **Domain Expertise** - Real knowledge base (Stripe)
+7. **Unified API** - Single `/api/v1/chat` endpoint with entity extraction
 
 ---
 

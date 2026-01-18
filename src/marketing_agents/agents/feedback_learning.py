@@ -14,6 +14,7 @@ from collections import defaultdict, Counter
 import statistics
 
 from ..core.base_agent import BaseAgent, AgentStatus
+from ..core.handoff_detector import HandoffDetector
 from ..tools.pattern_detector import PatternDetector
 
 
@@ -53,6 +54,10 @@ class FeedbackLearningAgent(BaseAgent):
             message_bus=message_bus,
             prompt_manager=prompt_manager,
         )
+
+        # Initialize handoff detector
+        handoff_config = self.config.get("agents", {}).get("orchestrator", {}).get("handoff_detector")
+        self.handoff_detector = HandoffDetector(llm=self.llm, config=handoff_config)
 
     def _register_tools(self) -> None:
         """Register tools for the feedback learning agent."""
@@ -173,7 +178,7 @@ class FeedbackLearningAgent(BaseAgent):
                     }
 
             # Check if handoff is needed
-            handoff_info = self._detect_handoff_need(message, result)
+            handoff_info = await self._detect_handoff_need(message, result)
 
             self.status = AgentStatus.IDLE
 
@@ -528,6 +533,25 @@ class FeedbackLearningAgent(BaseAgent):
             dict: Analysis results with recommendations
         """
         message_lower = message.lower()
+
+        # Check if this is an investigation request for specific issues
+        if any(
+            phrase in message_lower
+            for phrase in [
+                "investigate",
+                "investigate and recommend",
+                "can you investigate",
+                "multiple agents reporting",
+                "agents are reporting",
+                "look into",
+                "what's wrong with",
+                "issues with",
+                "problems with",
+            ]
+        ):
+            # Extract the issue being reported
+            issue = self._extract_issue_from_query(message)
+            return self._investigate_and_recommend(message, issue, time_range)
 
         # Check if this is an agent performance evaluation
         if any(
@@ -1725,16 +1749,224 @@ class FeedbackLearningAgent(BaseAgent):
 
         return f"Recommended variant: {best_variant} (score: {best_score:.3f})"
 
-    def _detect_handoff_need(
+    def _extract_issue_from_query(self, message: str) -> str:
+        """Extract the specific issue being mentioned in the query.
+
+        Args:
+            message: User message text
+
+        Returns:
+            str: Extracted issue description
+        """
+        message_lower = message.lower()
+
+        # Look for common patterns
+        issue_indicators = [
+            "issues with",
+            "problems with",
+            "trouble with",
+            "bug in",
+            "error in",
+            "failing",
+            "broken",
+        ]
+
+        for indicator in issue_indicators:
+            if indicator in message_lower:
+                # Extract what comes after the indicator
+                parts = message_lower.split(indicator, 1)
+                if len(parts) > 1:
+                    issue_text = parts[1].split(".")[0].strip()
+                    return issue_text
+
+        # If no specific indicator, try to extract key phrases
+        keywords = [
+            "checkout",
+            "payment",
+            "mobile",
+            "cart",
+            "conversion",
+            "form",
+            "api",
+            "integration",
+        ]
+        found_keywords = [kw for kw in keywords if kw in message_lower]
+
+        if found_keywords:
+            return " ".join(found_keywords)
+
+        return "general system issues"
+
+    def _investigate_and_recommend(
+        self, message: str, issue: str, time_range: str
+    ) -> dict:
+        """Investigate reported issues and provide recommendations.
+
+        Args:
+            message: Original user message
+            issue: Extracted issue description
+            time_range: Time range for analysis
+
+        Returns:
+            dict: Investigation results with recommendations
+        """
+        # Analyze the issue context
+        investigation = {
+            "issue": issue,
+            "severity": "medium",  # Default
+            "affected_areas": [],
+            "potential_causes": [],
+            "recommendations": [],
+        }
+
+        message_lower = message.lower()
+
+        # Determine severity based on keywords
+        if any(
+            word in message_lower
+            for word in ["critical", "urgent", "multiple agents", "many users"]
+        ):
+            investigation["severity"] = "high"
+        elif any(
+            word in message_lower for word in ["minor", "occasional", "sometimes"]
+        ):
+            investigation["severity"] = "low"
+
+        # Identify affected areas
+        if "mobile" in message_lower:
+            investigation["affected_areas"].append("Mobile experience")
+        if "checkout" in message_lower or "payment" in message_lower:
+            investigation["affected_areas"].append("Checkout/Payment flow")
+        if "cart" in message_lower:
+            investigation["affected_areas"].append("Shopping cart")
+        if "form" in message_lower:
+            investigation["affected_areas"].append("Form submission")
+
+        # Generate context-specific recommendations based on the issue
+        if "mobile" in message_lower and "checkout" in message_lower:
+            investigation["potential_causes"] = [
+                "Responsive design issues on smaller screens",
+                "Touch target sizes too small for mobile interaction",
+                "Payment form not optimized for mobile keyboards",
+                "Page load times affecting mobile completion rates",
+                "Third-party payment widgets not mobile-friendly",
+            ]
+            investigation["recommendations"] = [
+                {
+                    "priority": "high",
+                    "action": "Conduct mobile UX audit",
+                    "details": "Test checkout flow on various mobile devices to identify specific friction points",
+                },
+                {
+                    "priority": "high",
+                    "action": "Optimize touch targets",
+                    "details": "Ensure all buttons and form fields meet minimum 44x44px touch target size",
+                },
+                {
+                    "priority": "medium",
+                    "action": "Review payment integration",
+                    "details": "Verify payment provider's mobile SDK is properly implemented and up-to-date",
+                },
+                {
+                    "priority": "medium",
+                    "action": "A/B test simplified flow",
+                    "details": "Test a streamlined mobile checkout with fewer fields and steps",
+                },
+                {
+                    "priority": "low",
+                    "action": "Monitor mobile analytics",
+                    "details": "Set up detailed tracking for mobile checkout drop-off points",
+                },
+            ]
+        elif "checkout" in message_lower or "payment" in message_lower:
+            investigation["potential_causes"] = [
+                "Complex checkout process with too many steps",
+                "Payment gateway integration errors",
+                "Lack of preferred payment methods",
+                "Trust indicators missing",
+                "Hidden costs revealed late in the process",
+            ]
+            investigation["recommendations"] = [
+                {
+                    "priority": "high",
+                    "action": "Simplify checkout flow",
+                    "details": "Reduce checkout to 2-3 steps maximum, enable guest checkout",
+                },
+                {
+                    "priority": "high",
+                    "action": "Review error handling",
+                    "details": "Ensure payment errors provide clear, actionable messages to users",
+                },
+                {
+                    "priority": "medium",
+                    "action": "Add payment options",
+                    "details": "Consider adding popular payment methods (Apple Pay, Google Pay, PayPal)",
+                },
+                {
+                    "priority": "medium",
+                    "action": "Display trust signals",
+                    "details": "Add security badges, SSL indicators, and money-back guarantees",
+                },
+            ]
+        else:
+            # Generic recommendations for other issues
+            investigation["potential_causes"] = [
+                "User experience friction in the workflow",
+                "Technical errors or integration issues",
+                "Insufficient user guidance or documentation",
+                "Performance or reliability problems",
+            ]
+            investigation["recommendations"] = [
+                {
+                    "priority": "high",
+                    "action": "Gather detailed user feedback",
+                    "details": f"Set up surveys or interviews to understand specific pain points with {issue}",
+                },
+                {
+                    "priority": "high",
+                    "action": "Review error logs",
+                    "details": "Check system logs for recurring errors or exceptions",
+                },
+                {
+                    "priority": "medium",
+                    "action": "Conduct usability testing",
+                    "details": "Observe real users attempting to complete the affected workflow",
+                },
+                {
+                    "priority": "medium",
+                    "action": "Benchmark against competitors",
+                    "details": "Compare your implementation with industry best practices",
+                },
+            ]
+
+        return {
+            "request_type": "investigate_issues",
+            "issue_summary": {
+                "description": issue,
+                "severity": investigation["severity"],
+                "affected_areas": investigation["affected_areas"],
+                "agents_reporting": (
+                    "Multiple"
+                    if "multiple agents" in message_lower
+                    else "User reported"
+                ),
+            },
+            "investigation": investigation,
+            "recommendations": investigation["recommendations"],
+            "next_steps": [
+                "Prioritize recommendations by severity and impact",
+                "Create implementation plan with timeline",
+                "Set up monitoring to track improvement metrics",
+                "Schedule follow-up review in 2-4 weeks",
+            ],
+            "summary": f"Investigation complete: {len(investigation['recommendations'])} recommendations for {issue}",
+        }
+
+    async def _detect_handoff_need(
         self, message: str, result: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
-        Detect if feedback & learning request warrants a handoff to another agent.
-
-        Analyzes the user message and context to determine if:
-        - System-wide changes needed (→ Orchestrator)
-        - Strategic insights to apply (→ Marketing Strategy)
-        - Performance validation needed (→ Analytics & Evaluation)
+        Detect if feedback & learning request warrants a handoff to another agent using LLM reasoning.
 
         Args:
             message: User message text
@@ -1743,113 +1975,16 @@ class FeedbackLearningAgent(BaseAgent):
         Returns:
             Dictionary with handoff information if needed, empty dict otherwise
         """
-        handoff_info = {}
-        message_lower = message.lower()
-
-        self.logger.info(f"Checking handoff need for message: '{message[:100]}'")
-
-        # Scenario 1: System-Wide Configuration / Critical Issues → Orchestrator
-        # Keywords: system-wide, all agents, configuration change, global update, critical, emergency
-        orchestrator_keywords = [
-            "system-wide",
-            "system wide",
-            "all agents",
-            "configuration change",
-            "global update",
-            "critical",
-            "emergency",
-            "system down",
-            "all agents affected",
-            "entire system",
-            "across all agents",
-        ]
-
-        if any(keyword in message_lower for keyword in orchestrator_keywords):
-            self.logger.info(
-                "Handoff detected: orchestrator (system-wide change request)"
+        try:
+            # Use LLM-driven handoff detection
+            handoff_info = await self.handoff_detector.detect_handoff(
+                current_agent="feedback_learning",
+                user_message=message,
+                agent_analysis=result,
             )
-            handoff_info = {
-                "handoff_required": True,
-                "target_agent": "orchestrator",
-                "handoff_reason": "system_update_ready",
-                "context": {
-                    "update_type": "system_configuration",
-                    "user_message": message,
-                    "learning_result": result,
-                    "recommendation": "Orchestrator should coordinate system-wide changes",
-                },
-            }
+
             return handoff_info
 
-        # Scenario 2: Strategic Learning / Best Practice → Marketing Strategy Agent
-        # Keywords: strategic pattern, best practice, should inform strategy, change approach
-        strategic_keywords = [
-            "strategic pattern",
-            "strategic learning",
-            "best practice",
-            "should inform strategy",
-            "change approach",
-            "strategy should",
-            "inform strategy",
-            "optimization opportunity",
-            "should invest more",
-            "channel reallocation",
-            "underutilized",
-            "better roi",
-        ]
-
-        if any(keyword in message_lower for keyword in strategic_keywords):
-            self.logger.info(
-                "Handoff detected: marketing_strategy (strategic learning application)"
-            )
-            handoff_info = {
-                "handoff_required": True,
-                "target_agent": "marketing_strategy",
-                "handoff_reason": "strategic_learning",
-                "context": {
-                    "learning_type": "strategic_pattern_discovered",
-                    "user_message": message,
-                    "learning_result": result,
-                    "recommendation": "Marketing Strategy should incorporate this learning into campaigns",
-                },
-            }
-            return handoff_info
-
-        # Scenario 3: Validation / Impact Measurement → Analytics & Evaluation Agent
-        # Keywords: validate, analyze impact, need data on, measure effect, before and after
-        analytics_keywords = [
-            "validate",
-            "validation",
-            "analyze impact",
-            "need data on",
-            "measure effect",
-            "measure impact",
-            "measure the",
-            "measure actual",
-            "did it work",
-            "before and after",
-            "validate improvement",
-            "deeper analysis",
-            "performance impact",
-            "statistical",
-        ]
-
-        if any(keyword in message_lower for keyword in analytics_keywords):
-            self.logger.info(
-                "Handoff detected: analytics_evaluation (validation request)"
-            )
-            handoff_info = {
-                "handoff_required": True,
-                "target_agent": "analytics_evaluation",
-                "handoff_reason": "analysis_needed",
-                "context": {
-                    "analysis_type": "learning_validation",
-                    "user_message": message,
-                    "learning_result": result,
-                    "recommendation": "Analytics should perform statistical validation and impact measurement",
-                },
-            }
-            return handoff_info
-
-        self.logger.info("No handoff needed - standard learning query")
-        return {}
+        except Exception as e:
+            self.logger.error(f"Handoff detection failed: {e}", exc_info=True)
+            return {}

@@ -20,6 +20,18 @@ agents:
       name: "gpt-4o-mini"
       temperature: 0.3
       max_tokens: 2000
+    intent_classifier:
+      enabled: true
+      model: "gpt-4o-mini"
+      temperature: 0.1
+      confidence_threshold: 0.7
+      fallback_agent: "customer_support"
+    handoff_detector:
+      enabled: true
+      model: "gpt-4o-mini"
+      temperature: 0.1
+      confidence_threshold: 0.8
+      max_handoffs: 3
     capabilities:
       - agent_registry
       - task_routing

@@ -6,13 +6,14 @@ and provides data-driven insights for optimization.
 """
 
 from typing import Dict, List, Optional, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 import statistics
 from scipy import stats
 import numpy as np
 
 from ..core.base_agent import BaseAgent, AgentStatus
+from ..core.handoff_detector import HandoffDetector
 from ..tools.metrics_calculator import (
     calculate_campaign_metrics,
     calculate_agent_metrics,
@@ -52,6 +53,9 @@ class AnalyticsEvaluationAgent(BaseAgent):
         )
         self.metrics_history: List[Dict] = []
         self.kpi_definitions = {}
+        # Initialize LLM-driven handoff detector
+        handoff_config = self.config.get("agents", {}).get("orchestrator", {}).get("handoff_detector")
+        self.handoff_detector = HandoffDetector(llm=self.llm, config=handoff_config)
 
     def should_handoff(self, context: Dict[str, Any]) -> Optional[Any]:
         """
@@ -167,7 +171,9 @@ class AnalyticsEvaluationAgent(BaseAgent):
             # Store user query for handoff detection
             if user_query:
                 input_data["message"] = user_query
-                self.logger.info(f"User query: {user_query}")
+                self.logger.info(f"📝 User query extracted: '{user_query}'")
+            else:
+                self.logger.warning("⚠️ No user query found in input_data")
 
             self.logger.info(f"Processing analytics request: {request_type}")
 
@@ -185,12 +191,14 @@ class AnalyticsEvaluationAgent(BaseAgent):
             else:
                 # Default: comprehensive performance report
                 # Extract time_range from input_data or date_range
-                time_range = input_data.get("time_range", "24h")
+                # Default to 365d to capture synthetic historical data
+                time_range = input_data.get("time_range", "365d")
 
-                # If date_range is provided (from API), convert to time_range
+                # If date_range is provided (from API), ensure we use a long enough range
                 if "date_range" in input_data:
                     # Use a longer time range to capture all synthetic data
-                    time_range = "365d"
+                    if time_range in ["24h", "7d", "30d"]:
+                        time_range = "365d"
                     self.logger.info(
                         f"Using date_range, setting time_range to {time_range}"
                     )
@@ -200,6 +208,13 @@ class AnalyticsEvaluationAgent(BaseAgent):
                 # Generate contextual report based on user query
                 if user_query:
                     report = self._generate_contextual_report(metrics, user_query)
+                    self.logger.info(
+                        f"📝 DEBUG: Generated report type: {type(report).__name__}, length: {len(report) if isinstance(report, str) else 'N/A'}"
+                    )
+                    if isinstance(report, str) and len(report) > 0:
+                        self.logger.info(
+                            f"📝 DEBUG: First 200 chars of report: {report[:200]}"
+                        )
                 else:
                     report = self._generate_report(metrics)
 
@@ -209,6 +224,11 @@ class AnalyticsEvaluationAgent(BaseAgent):
                     "report": report,
                     "user_query": user_query,
                 }
+
+                # Log for debugging
+                self.logger.info(
+                    f"✅ Generated analytics result with report type: {type(report).__name__}"
+                )
 
             # Ensure result is not None
             if result is None:
@@ -258,7 +278,16 @@ class AnalyticsEvaluationAgent(BaseAgent):
                     )
                 handoff_info = {}
             else:
-                handoff_info = self._detect_handoff_need(result, input_data)
+                self.logger.info(
+                    f"🔍 Checking handoff need for query: '{user_query[:100] if user_query else 'No query'}'"
+                )
+                handoff_info = await self._detect_handoff_need(result, input_data)
+                if handoff_info.get("handoff_required"):
+                    self.logger.info(
+                        f"✨ Handoff detected → {handoff_info.get('target_agent')} (reason: {handoff_info.get('handoff_reason')})"
+                    )
+                else:
+                    self.logger.info("⏹️ No handoff required - completing analysis")
 
             # Generate meaningful summary based on user query or handoff
             if handoff_info.get("handoff_required"):
@@ -284,12 +313,15 @@ class AnalyticsEvaluationAgent(BaseAgent):
             return response
 
         except Exception as e:
+            import traceback
+
             self.logger.error(f"Analytics processing failed: {e}")
+            self.logger.error(f"Traceback: {traceback.format_exc()}")
             self.status = AgentStatus.ERROR
             return {
                 "success": False,
                 "error": str(e),
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "is_final": True,
                 "summary": f"Analytics processing failed: {str(e)}",
             }
@@ -366,7 +398,8 @@ class AnalyticsEvaluationAgent(BaseAgent):
         """
         # Parse time range
         duration = self._parse_time_range(time_range)
-        cutoff_time = datetime.utcnow() - duration
+        # Use timezone-aware datetime to match record timestamps
+        cutoff_time = datetime.now(timezone.utc) - duration
 
         # Query execution history from memory manager
         execution_data = []
@@ -381,21 +414,27 @@ class AnalyticsEvaluationAgent(BaseAgent):
             except Exception as e:
                 self.logger.warning(f"Could not retrieve execution history: {e}")
 
-        # Fallback to agent's local execution history
-        if not execution_data:
-            execution_data = self.execution_history
-
-        # If still no data, load from synthetic data files
-        if not execution_data:
+        # ALWAYS load synthetic data for demo/analytics - don't rely on sparse execution history
+        # In production, this would be replaced with actual database queries
+        if (
+            len(execution_data) < 50
+        ):  # If we have less than 50 records, supplement with synthetic
             try:
                 self.logger.info("Loading synthetic data from files...")
-                execution_data = load_execution_data(time_range=time_range)
+                synthetic_data = load_execution_data(time_range=time_range)
                 self.logger.info(
-                    f"Loaded {len(execution_data)} records from synthetic data"
+                    f"Loaded {len(synthetic_data)} records from synthetic data"
                 )
+                # Merge with any existing data (dedup by execution_id)
+                existing_ids = {r.get("execution_id") for r in execution_data}
+                for record in synthetic_data:
+                    if record.get("execution_id") not in existing_ids:
+                        execution_data.append(record)
             except Exception as e:
                 self.logger.error(f"Failed to load synthetic data: {e}")
-                execution_data = []
+                # Fall back to agent's local execution history if synthetic load fails
+                if not execution_data:
+                    execution_data = self.execution_history
 
         # Filter by time range
         filtered_data = [
@@ -435,12 +474,22 @@ class AnalyticsEvaluationAgent(BaseAgent):
             "time_range": time_range,
             "data_points": len(filtered_data),
             "period_start": cutoff_time.isoformat(),
-            "period_end": datetime.utcnow().isoformat(),
+            "period_end": datetime.now(timezone.utc).isoformat(),
         }
 
         # Calculate requested metrics
         if "campaign" in metric_types:
-            metrics["campaign_metrics"] = calculate_campaign_metrics(filtered_data)
+            # Filter for records with campaign metrics (impressions, clicks, etc.)
+            campaign_records = [
+                record
+                for record in filtered_data
+                if record.get("result", {}).get("metrics", {}).get("impressions")
+                is not None
+            ]
+            self.logger.info(
+                f"Filtering for campaign metrics: {len(campaign_records)}/{len(filtered_data)} records have campaign data"
+            )
+            metrics["campaign_metrics"] = calculate_campaign_metrics(campaign_records)
 
         if "agent" in metric_types:
             metrics["agent_metrics"] = calculate_agent_metrics(filtered_data)
@@ -869,6 +918,12 @@ class AnalyticsEvaluationAgent(BaseAgent):
         if isinstance(timestamp, str):
             timestamp = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
 
+        # Ensure both datetimes are timezone-aware for comparison
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
+        if cutoff_time.tzinfo is None:
+            cutoff_time = cutoff_time.replace(tzinfo=timezone.utc)
+
         return timestamp >= cutoff_time
 
     def _generate_insights(self, metrics: dict) -> List[str]:
@@ -906,16 +961,11 @@ class AnalyticsEvaluationAgent(BaseAgent):
 
         return insights
 
-    def _detect_handoff_need(
+    async def _detect_handoff_need(
         self, result: Dict[str, Any], input_data: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
-        Detect if analysis results warrant a handoff to another agent.
-
-        Analyzes the metrics and context to determine if:
-        - Strategic pivot needed (→ Marketing Strategy)
-        - Learning opportunity identified (→ Feedback Learning)
-        - Customer issues detected (→ Customer Support)
+        Detect if analysis results warrant a handoff to another agent using LLM reasoning.
 
         Args:
             result: The analysis result dictionary
@@ -924,231 +974,21 @@ class AnalyticsEvaluationAgent(BaseAgent):
         Returns:
             Dictionary with handoff information if needed, empty dict otherwise
         """
-        handoff_info = {}
+        try:
+            user_message = input_data.get("message", "")
 
-        # Safety check: ensure result is not None
-        if result is None:
-            self.logger.error("Result is None in _detect_handoff_need")
+            # Use LLM-driven handoff detection
+            handoff_info = await self.handoff_detector.detect_handoff(
+                current_agent="analytics_evaluation",
+                user_message=user_message,
+                agent_analysis=result,
+            )
+
+            return handoff_info
+
+        except Exception as e:
+            self.logger.error(f"Handoff detection failed: {e}", exc_info=True)
             return {}
-
-        # Extract metrics if available
-        metrics = result.get("metrics", {})
-        if metrics is None:
-            metrics = {}
-
-        campaign_metrics = metrics.get("campaign_metrics", {})
-        if campaign_metrics is None:
-            campaign_metrics = {}
-
-        # Check if report is a dict (legacy) or string (new format)
-        report = result.get("report", {})
-        comparison = {}
-        if isinstance(report, dict):
-            comparison = report.get("comparison", {})
-
-        # Check for performance decline requiring strategic pivot
-        if comparison:
-            campaign_comp = comparison.get("campaign", {})
-            roi_change = campaign_comp.get("roi_change", 0)
-            ctr_change = campaign_comp.get("ctr_change", 0)
-            conversion_change = campaign_comp.get("conversion_rate_change", 0)
-
-            # Significant decline (>20%) triggers handoff to marketing strategy
-            if roi_change < -20 or ctr_change < -20 or conversion_change < -20:
-                handoff_info = {
-                    "handoff_required": True,
-                    "target_agent": "marketing_strategy",
-                    "handoff_reason": "strategic_pivot_needed",
-                    "context": {
-                        "analysis_type": "performance_decline_analysis",
-                        "severity": "high",
-                        "findings": [
-                            f"ROI changed by {roi_change:.1f}%",
-                            f"CTR changed by {ctr_change:.1f}%",
-                            f"Conversion rate changed by {conversion_change:.1f}%",
-                        ],
-                        "metrics": campaign_metrics,
-                        "recommendation": "Significant performance decline detected. Strategic review and pivot recommended.",
-                    },
-                }
-                return handoff_info
-
-        # Check user message for handoff triggers
-        user_message = input_data.get("message", "").lower()
-        self.logger.info(f"Checking handoff for message: '{user_message[:100]}'")
-
-        # Scenario 1: Customer satisfaction issues (check first - most specific)
-        satisfaction_keywords = [
-            "satisfaction",
-            "churn",
-            "nps",
-            "retention",
-            "complaints",
-            "unhappy",
-            "cancellation",
-        ]
-        if any(keyword in user_message for keyword in satisfaction_keywords):
-            self.logger.info(
-                f"Handoff detected: customer_support (satisfaction keywords)"
-            )
-            handoff_info = {
-                "handoff_required": True,
-                "target_agent": "customer_support",
-                "handoff_reason": "customer_issue_detected",
-                "context": {
-                    "issue_type": "satisfaction_analysis_requested",
-                    "severity": "medium",
-                    "metrics": metrics,
-                    "recommendation": "Customer Support team should investigate satisfaction trends",
-                },
-            }
-            return handoff_info
-
-        # Scenario 2: Prediction accuracy improvement or model optimization
-        # Questions about improving prediction accuracy should go to feedback_learning
-        prediction_improvement_keywords = [
-            "prediction",
-            "predictions",
-            "accurate",
-            "accuracy",
-            "forecast",
-            "forecasting",
-            "improve predictions",
-            "prediction accuracy",
-            "model performance",
-            "ml model",
-            "machine learning model",
-        ]
-        improvement_keywords = [
-            "improve",
-            "optimize",
-            "better",
-            "enhance",
-            "increase accuracy",
-        ]
-
-        # Check if user is asking about prediction improvement
-        has_prediction = any(
-            keyword in user_message for keyword in prediction_improvement_keywords
-        )
-        has_improvement = any(
-            keyword in user_message for keyword in improvement_keywords
-        )
-
-        if has_prediction and has_improvement:
-            self.logger.info(
-                f"Handoff detected: feedback_learning (prediction improvement)"
-            )
-            handoff_info = {
-                "handoff_required": True,
-                "target_agent": "feedback_learning",
-                "handoff_reason": "learning_opportunity",
-                "context": {
-                    "pattern_type": "model_improvement_needed",
-                    "insight": "User requesting prediction accuracy improvement",
-                    "metrics": metrics,
-                    "recommendation": "Evaluate and improve forecasting models",
-                },
-            }
-            return handoff_info
-
-        # Scenario 3: Pattern discovery for systematization
-        pattern_keywords = [
-            "systematize",
-            "pattern",
-            "learning",
-            "best practice",
-            "consistently",
-            "outperform",
-            "video content",
-            "always",
-            "learn from",
-        ]
-        if any(keyword in user_message for keyword in pattern_keywords):
-            self.logger.info(f"Handoff detected: feedback_learning (pattern keywords)")
-            handoff_info = {
-                "handoff_required": True,
-                "target_agent": "feedback_learning",
-                "handoff_reason": "learning_opportunity",
-                "context": {
-                    "pattern_type": "performance_pattern",
-                    "insight": "Analysis revealed pattern suitable for systematization",
-                    "metrics": metrics,
-                    "recommendation": "Document this pattern as a best practice",
-                },
-            }
-            return handoff_info
-
-        # Scenario 4: Performance decline or strategic recommendations (check last - most general)
-        # Note: Only handoff for actual strategic planning, not analytics questions about improvement
-        decline_keywords = [
-            "declining",
-            "dropped",
-            "falling",
-            "decreasing",
-            "worse",
-            "poor",
-            "not working",
-            "failing",
-            "underperforming",
-        ]
-        strategic_keywords = [
-            "recommend strategy",
-            "marketing strategy",
-            "pivot strategy",
-            "strategic plan",
-            "campaign strategy",
-            "new approach",
-        ]
-
-        # Only handoff if there's actual decline mentioned or explicit strategic planning request
-        is_decline_mentioned = any(
-            keyword in user_message for keyword in decline_keywords
-        )
-        is_strategic_planning = any(
-            keyword in user_message for keyword in strategic_keywords
-        )
-
-        # Don't handoff for analytics questions about predictions, accuracy, or performance metrics
-        is_analytics_question = any(
-            word in user_message
-            for word in [
-                "prediction",
-                "predictions",
-                "forecast",
-                "accurate",
-                "accuracy",
-                "metrics",
-                "performance",
-                "data",
-                "analysis",
-                "report",
-            ]
-        )
-
-        if (
-            is_decline_mentioned or is_strategic_planning
-        ) and not is_analytics_question:
-            self.logger.info(
-                f"Handoff detected: marketing_strategy (decline/strategic keywords)"
-            )
-            handoff_info = {
-                "handoff_required": True,
-                "target_agent": "marketing_strategy",
-                "handoff_reason": "strategic_pivot_needed",
-                "context": {
-                    "analysis_type": "strategic_recommendation_requested",
-                    "severity": ("high" if is_decline_mentioned else "medium"),
-                    "findings": [f"User query: {input_data.get('message', '')}"],
-                    "metrics": metrics,
-                    "recommendation": "User requested strategic improvements or reported performance decline",
-                },
-            }
-            return handoff_info
-
-        self.logger.info("No handoff needed - normal analytics query")
-        # No handoff needed
-        return {}
 
     def _generate_contextual_report(self, metrics: dict, user_query: str) -> str:
         """Generate contextual report based on user query."""

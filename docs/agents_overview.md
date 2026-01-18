@@ -56,10 +56,11 @@ Central coordinator that manages agent lifecycle, routes requests, handles hando
 
 **Tools:**
 - `agent_registry`: Register and discover available agents
-- `task_router`: Intelligent routing of tasks to appropriate agents
+- `intent_classifier`: LLM-based semantic intent classification with entity extraction (GPT-4o-mini)
+- `task_router`: Intelligent routing based on classified intent
 - `workflow_manager`: Define and execute multi-step workflows
 - `health_monitor`: Monitor agent health and performance
-- `handoff_coordinator`: Manage inter-agent handoffs
+- `handoff_coordinator`: Manage inter-agent handoffs with LLM-driven detection
 - `priority_queue`: Manage task prioritization
 - `circuit_breaker`: Handle failing agents gracefully
 
@@ -124,6 +125,8 @@ Develops comprehensive marketing strategies, creates campaign plans, generates c
 - **Shared:** Brand guidelines, audience personas, competitive intelligence
 
 **Handoff Triggers:**
+*Note: Handoff detection uses LLM reasoning (GPT-4o-mini) instead of keyword matching for context-aware decisions*
+
 1. **To Analytics & Evaluation Agent:** After creating strategy, for performance forecasting and feasibility analysis
 2. **To Customer Support Agent:** When customer insights are needed for strategy refinement
 3. **To Orchestrator:** When strategy is complete and ready for execution
@@ -179,6 +182,8 @@ Handles customer inquiries, provides support for marketing campaigns, resolves i
 - **Shared:** Knowledge base, FAQ database, escalation protocols
 
 **Handoff Triggers:**
+*Note: Handoff detection uses LLM reasoning (GPT-4o-mini) for context-aware decisions with confidence scoring*
+
 1. **To Marketing Strategy Agent:** When customer insights reveal strategic opportunities or campaign issues
 2. **To Analytics & Evaluation Agent:** For deep analysis of customer feedback patterns and sentiment trends
 3. **To Orchestrator:** When complex multi-department coordination is needed

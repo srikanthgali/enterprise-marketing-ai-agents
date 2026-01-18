@@ -112,15 +112,26 @@ def calculate_agent_metrics(execution_data: List[Dict]) -> Dict[str, Any]:
 
         # Calculate response time
         if record.get("started_at") and record.get("completed_at"):
-            started = record["started_at"]
-            completed = record["completed_at"]
-            if isinstance(started, str):
-                started = datetime.fromisoformat(started.replace("Z", "+00:00"))
-            if isinstance(completed, str):
-                completed = datetime.fromisoformat(completed.replace("Z", "+00:00"))
+            try:
+                started = record["started_at"]
+                completed = record["completed_at"]
+                if isinstance(started, str):
+                    started = datetime.fromisoformat(started.replace("Z", "+00:00"))
+                if isinstance(completed, str):
+                    completed = datetime.fromisoformat(completed.replace("Z", "+00:00"))
 
-            response_time = (completed - started).total_seconds()
-            response_times.append(response_time)
+                # Only calculate if both are valid datetime objects
+                if (
+                    started
+                    and completed
+                    and isinstance(started, datetime)
+                    and isinstance(completed, datetime)
+                ):
+                    response_time = (completed - started).total_seconds()
+                    response_times.append(response_time)
+            except (ValueError, TypeError, AttributeError) as e:
+                # Skip records with invalid timestamps
+                pass
 
         # Count statuses
         if status == "completed":
@@ -204,16 +215,27 @@ def calculate_system_metrics(
     # Calculate latencies and errors
     for record in execution_data:
         if record.get("started_at") and record.get("completed_at"):
-            started = record["started_at"]
-            completed = record["completed_at"]
+            try:
+                started = record["started_at"]
+                completed = record["completed_at"]
 
-            if isinstance(started, str):
-                started = datetime.fromisoformat(started.replace("Z", "+00:00"))
-            if isinstance(completed, str):
-                completed = datetime.fromisoformat(completed.replace("Z", "+00:00"))
+                if isinstance(started, str):
+                    started = datetime.fromisoformat(started.replace("Z", "+00:00"))
+                if isinstance(completed, str):
+                    completed = datetime.fromisoformat(completed.replace("Z", "+00:00"))
 
-            latency = (completed - started).total_seconds()
-            latencies.append(latency)
+                # Only calculate if both are valid datetime objects
+                if (
+                    started
+                    and completed
+                    and isinstance(started, datetime)
+                    and isinstance(completed, datetime)
+                ):
+                    latency = (completed - started).total_seconds()
+                    latencies.append(latency)
+            except (ValueError, TypeError, AttributeError):
+                # Skip records with invalid timestamps
+                pass
 
         status = record.get("status", "")
         if status in ["failed", "error"]:
@@ -221,17 +243,29 @@ def calculate_system_metrics(
 
     # Calculate throughput (executions per hour)
     if execution_data:
-        first_time = execution_data[0].get("started_at")
-        last_time = execution_data[-1].get(
-            "completed_at", execution_data[-1].get("started_at")
-        )
+        try:
+            first_time = execution_data[0].get("started_at")
+            last_time = execution_data[-1].get(
+                "completed_at", execution_data[-1].get("started_at")
+            )
 
-        if isinstance(first_time, str):
-            first_time = datetime.fromisoformat(first_time.replace("Z", "+00:00"))
-        if isinstance(last_time, str):
-            last_time = datetime.fromisoformat(last_time.replace("Z", "+00:00"))
+            if isinstance(first_time, str):
+                first_time = datetime.fromisoformat(first_time.replace("Z", "+00:00"))
+            if isinstance(last_time, str):
+                last_time = datetime.fromisoformat(last_time.replace("Z", "+00:00"))
 
-        time_span = (last_time - first_time).total_seconds()
+            # Only calculate if both are valid datetime objects
+            if (
+                first_time
+                and last_time
+                and isinstance(first_time, datetime)
+                and isinstance(last_time, datetime)
+            ):
+                time_span = (last_time - first_time).total_seconds()
+            else:
+                time_span = 0
+        except (ValueError, TypeError, AttributeError):
+            time_span = 0
         throughput = (len(execution_data) / time_span * 3600) if time_span > 0 else 0
     else:
         throughput = 0

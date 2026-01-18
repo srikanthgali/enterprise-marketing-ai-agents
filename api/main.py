@@ -15,7 +15,7 @@ from typing import Dict, Any
 
 from config.settings import get_settings
 from api.dependencies import get_orchestrator, get_memory_manager, get_message_bus
-from api.routes import agents, workflows, health, prompts
+from api.routes import agents, workflows, health, prompts, chat
 from src.marketing_agents.utils import get_logger
 
 # Initialize logger
@@ -175,6 +175,7 @@ async def general_exception_handler(request: Request, exc: Exception):
 
 
 # Include routers with API v1 prefix
+app.include_router(chat.router, prefix="/api/v1")  # NEW: Unified chat endpoint
 app.include_router(health.router, prefix="/api/v1")
 app.include_router(agents.router, prefix="/api/v1")
 app.include_router(workflows.router, prefix="/api/v1")

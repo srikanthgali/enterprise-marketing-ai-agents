@@ -285,6 +285,7 @@ class WorkflowGraphBuilder:
         # Analytics tasks
         elif task_type in [
             "performance_analysis",
+            "performance_analytics",
             "metrics_evaluation",
             "reporting",
             "analytics",

@@ -24,6 +24,7 @@ from .state import (
     get_execution_summary,
 )
 from .graph_builder import WorkflowGraphBuilder
+from .intent_classifier import IntentClassifier
 
 
 class OrchestratorAgent(BaseAgent):
@@ -76,6 +77,16 @@ class OrchestratorAgent(BaseAgent):
 
         # LangGraph workflow - will be initialized after agents are registered
         self.workflow_graph = None
+
+        # Initialize intent classifier with config
+        intent_classifier_config = (
+            self.config.get("agents", {})
+            .get("orchestrator", {})
+            .get("intent_classifier")
+        )
+        self.intent_classifier = IntentClassifier(
+            llm=self.llm, config=intent_classifier_config
+        )
 
     def _initialize_workflow_graph(self) -> None:
         """Initialize the LangGraph workflow after agents are registered."""
@@ -149,10 +160,11 @@ class OrchestratorAgent(BaseAgent):
 
     async def process(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Process incoming request using LangGraph workflow.
+        Process incoming request with LLM-based intent classification.
 
         Args:
-            input_data: Request data containing task type and parameters
+            input_data: Request data containing task type and parameters, OR
+                       raw message for intent classification
 
         Returns:
             Processing result
@@ -162,10 +174,39 @@ class OrchestratorAgent(BaseAgent):
         start_time = datetime.utcnow()
 
         try:
-            task_type = input_data.get("task_type")
-            request_data = input_data.get("data", {})
+            classification = None
 
-            self.logger.info(f"Processing request via LangGraph workflow: {task_type}")
+            # Check if this is a raw message (new flow) or structured data (legacy)
+            if "message" in input_data and "task_type" not in input_data:
+                # NEW FLOW: Raw message → classify intent
+                user_message = input_data["message"]
+
+                self.logger.info(f"Classifying intent for: {user_message[:100]}...")
+
+                # Use LLM to classify intent
+                classification = await self.intent_classifier.classify(user_message)
+
+                self.logger.info(
+                    f"Intent classified: {classification.intent} "
+                    f"(confidence: {classification.confidence:.2f}) → {classification.target_agent}"
+                )
+
+                # Convert to task_type and data for orchestrator
+                task_type = self.intent_classifier.get_task_type(classification.intent)
+                request_data = {
+                    "message": user_message,
+                    "intent": classification.intent,
+                    "confidence": classification.confidence,
+                    "entities": classification.entities,
+                    "reasoning": classification.reasoning,
+                }
+
+            else:
+                # LEGACY FLOW: Structured data from API
+                task_type = input_data.get("task_type")
+                request_data = input_data.get("data", {})
+
+            self.logger.info(f"Executing workflow: {task_type}")
 
             # Execute via LangGraph workflow
             result = await self.execute_workflow(task_type, request_data)
@@ -180,6 +221,9 @@ class OrchestratorAgent(BaseAgent):
                 "workflow_id": result.get("workflow_id"),
                 "result": result.get("final_result"),
                 "execution_summary": result.get("execution_summary"),
+                "intent_classification": (
+                    classification.dict() if classification else None
+                ),
                 "duration": duration,
             }
 
@@ -369,15 +413,34 @@ class OrchestratorAgent(BaseAgent):
         # Record agent start in workflow state
         from .state import record_agent_start
 
-        state = record_agent_start(state, agent_id)
-
-        agent = self.agents[agent_id]
-        execution_start = datetime.utcnow()
-
         # Check if this agent was the target of a handoff
         was_handoff_target = (
             state.get("handoff_required") and state.get("target_agent") == agent_id
         )
+
+        # Extract handoff information if this is a handoff
+        handoff_from = None
+        handoff_reason = None
+        if was_handoff_target:
+            handoff_from = state.get("current_agent")
+            # Try to get handoff reason from task_data
+            if isinstance(state.get("task_data"), dict):
+                handoff_reason = state["task_data"].get(
+                    "handoff_reason", "handoff_requested"
+                )
+            else:
+                handoff_reason = "handoff_requested"
+
+        state = record_agent_start(
+            state,
+            agent_id,
+            is_handoff=was_handoff_target,
+            handoff_from=handoff_from,
+            handoff_reason=handoff_reason,
+        )
+
+        agent = self.agents[agent_id]
+        execution_start = datetime.utcnow()
 
         # If this is a handoff, mark the input data to prevent infinite loops
         if was_handoff_target:
@@ -452,6 +515,61 @@ class OrchestratorAgent(BaseAgent):
                     f"Handoff requested from {agent_id} to {to_agent}: {reason} (explicit)"
                 )
 
+                # CRITICAL: Prevent self-handoffs (A → A)
+                if agent_id == to_agent:
+                    self.logger.warning(
+                        f"❌ Self-handoff prevented: {agent_id} → {to_agent}. "
+                        f"Completing workflow instead."
+                    )
+                    updated_state["next_action"] = "complete"
+                    updated_state["handoff_required"] = False
+                    updated_state["target_agent"] = None
+                    if isinstance(result, dict):
+                        result["warning"] = (
+                            f"Self-handoff prevented: {agent_id} → {to_agent}"
+                        )
+                    return updated_state
+
+                # CRITICAL: Detect handoff loops (ping-pong between same agents)
+                # Check last 5 handoffs to see if we're in a loop
+                recent_handoffs = []
+                for record in state.get("execution_history", [])[-5:]:
+                    if record.get("is_handoff"):
+                        recent_handoffs.append(
+                            {
+                                "from": record.get("handoff_from"),
+                                "to": record.get("agent_id"),
+                            }
+                        )
+
+                # Check if this handoff would create a back-and-forth pattern
+                # (A → B → A) or (A → B → A → B)
+                handoff_loop_detected = False
+                if len(recent_handoffs) >= 2:
+                    # Check last 2 handoffs: if we have A→B then B→A, that's a loop
+                    last_handoff = recent_handoffs[-1]
+                    if (
+                        last_handoff["from"] == to_agent
+                        and last_handoff["to"] == agent_id
+                    ):
+                        handoff_loop_detected = True
+                        self.logger.warning(
+                            f"🔁 Handoff loop detected: {agent_id} ⇄ {to_agent}. "
+                            f"Completing workflow instead of creating infinite loop."
+                        )
+
+                if handoff_loop_detected:
+                    # Instead of handoff, mark workflow as complete
+                    updated_state["next_action"] = "complete"
+                    updated_state["handoff_required"] = False
+                    updated_state["target_agent"] = None
+                    # Add warning to result
+                    if isinstance(result, dict):
+                        result["warning"] = (
+                            f"Handoff loop prevented: {agent_id} ⇄ {to_agent}"
+                        )
+                    return updated_state
+
                 await self.handoff_manager.request_handoff(
                     from_agent=agent_id,
                     to_agent=to_agent,
@@ -468,11 +586,17 @@ class OrchestratorAgent(BaseAgent):
                     # Context takes precedence
                     new_task_data = updated_state.get("task_data", {}).copy()
                     new_task_data.update(context)
+                    # Ensure handoff_reason is in task_data for tracking
+                    new_task_data["handoff_reason"] = reason
                     handoff_state["task_data"] = new_task_data
 
                     # Update task_type if provided in context
                     if "type" in context:
                         handoff_state["task_type"] = context["type"]
+                else:
+                    # If no context dict, still add handoff_reason to task_data
+                    if isinstance(handoff_state.get("task_data"), dict):
+                        handoff_state["task_data"]["handoff_reason"] = reason
 
                 self.logger.info(
                     f"Created handoff state: next_action={handoff_state.get('next_action')}, "
@@ -509,6 +633,10 @@ class OrchestratorAgent(BaseAgent):
                 updated_state = set_handoff(
                     updated_state, handoff.to_agent, handoff.reason
                 )
+
+                # Add handoff_reason to task_data for tracking
+                if isinstance(updated_state.get("task_data"), dict):
+                    updated_state["task_data"]["handoff_reason"] = handoff.reason
             else:
                 # No handoff - check if this completes the workflow
                 if result.get("is_final", False):

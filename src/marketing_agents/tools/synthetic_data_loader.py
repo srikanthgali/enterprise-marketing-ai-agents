@@ -143,9 +143,15 @@ class SyntheticDataLoader:
         Returns:
             Execution record with metrics
         """
-        # Parse dates
-        start_date = datetime.strptime(campaign["start_date"], "%Y-%m-%d")
-        end_date = datetime.strptime(campaign["end_date"], "%Y-%m-%d")
+        # Parse dates (convert to timezone-aware UTC)
+        from datetime import timezone
+
+        start_date = datetime.strptime(campaign["start_date"], "%Y-%m-%d").replace(
+            tzinfo=timezone.utc
+        )
+        end_date = datetime.strptime(campaign["end_date"], "%Y-%m-%d").replace(
+            tzinfo=timezone.utc
+        )
 
         # Calculate duration
         duration = (end_date - start_date).total_seconds()
@@ -266,6 +272,8 @@ class SyntheticDataLoader:
         Returns:
             Cutoff datetime
         """
+        from datetime import timezone
+
         unit = time_range[-1]
         value = int(time_range[:-1])
 
@@ -278,7 +286,8 @@ class SyntheticDataLoader:
         else:
             delta = timedelta(days=1)  # Default to 1 day
 
-        return datetime.utcnow() - delta
+        # CRITICAL: Use timezone-aware datetime for comparison
+        return datetime.now(timezone.utc) - delta
 
     def _is_within_time_range(
         self, record: Dict[str, Any], cutoff_time: datetime
@@ -294,9 +303,18 @@ class SyntheticDataLoader:
             True if record is within range
         """
         try:
+            from datetime import timezone
+
             started_at = record.get("started_at", "")
             if isinstance(started_at, str):
                 started_at = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+
+            # Ensure both datetimes are timezone-aware for comparison
+            if started_at.tzinfo is None:
+                started_at = started_at.replace(tzinfo=timezone.utc)
+            if cutoff_time.tzinfo is None:
+                cutoff_time = cutoff_time.replace(tzinfo=timezone.utc)
+
             return started_at >= cutoff_time
         except (ValueError, TypeError):
             return False

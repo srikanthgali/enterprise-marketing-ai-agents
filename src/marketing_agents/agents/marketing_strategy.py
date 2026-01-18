@@ -14,6 +14,7 @@ import re
 from langchain_core.messages import SystemMessage, HumanMessage
 
 from ..core.base_agent import BaseAgent, AgentStatus
+from ..core.handoff_detector import HandoffDetector
 from ..tools.web_search import WebSearchTool
 from ..tools.kb_search import KnowledgeBaseSearchTool
 
@@ -57,6 +58,14 @@ class MarketingStrategyAgent(BaseAgent):
         # Initialize tools
         self.web_search_tool = WebSearchTool()
         self.kb_search_tool = KnowledgeBaseSearchTool()
+
+        # Initialize handoff detector with config from orchestrator
+        handoff_config = (
+            self.config.get("agents", {})
+            .get("orchestrator", {})
+            .get("handoff_detector")
+        )
+        self.handoff_detector = HandoffDetector(llm=self.llm, config=handoff_config)
 
     def _extract_json_from_response(self, content: str) -> str:
         """Extract JSON from LLM response, handling markdown code blocks.
@@ -187,7 +196,7 @@ class MarketingStrategyAgent(BaseAgent):
                 )
                 handoff_info = {}
             else:
-                handoff_info = self._detect_handoff_need(message, result)
+                handoff_info = await self._detect_handoff_need(message, result)
 
             # Log execution
             duration = (datetime.utcnow() - start_time).total_seconds()
@@ -1211,16 +1220,11 @@ Based on the above research, provide 5 specific, actionable marketing recommenda
             "product": product,
         }
 
-    def _detect_handoff_need(
+    async def _detect_handoff_need(
         self, message: str, result: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
-        Detect if marketing strategy request warrants a handoff to another agent.
-
-        Analyzes the user message and context to determine if:
-        - Performance analysis needed (→ Analytics & Evaluation)
-        - Customer insights needed (→ Customer Support)
-        - Strategy optimization needed (→ Feedback & Learning)
+        Detect if marketing strategy request warrants a handoff to another agent using LLM reasoning.
 
         Args:
             message: User message text
@@ -1229,119 +1233,16 @@ Based on the above research, provide 5 specific, actionable marketing recommenda
         Returns:
             Dictionary with handoff information if needed, empty dict otherwise
         """
-        handoff_info = {}
-        message_lower = message.lower()
-
-        self.logger.info(f"Checking handoff need for message: '{message[:100]}'")
-
-        # Scenario 1: Performance Analysis / Validation → Analytics Agent
-        # Keywords: analyze, performance, metrics, results, ROI, effectiveness, forecast
-        analytics_keywords = [
-            "analyze",
-            "analysis",
-            "performance",
-            "performing",
-            "metrics",
-            "results",
-            "roi",
-            "effectiveness",
-            "effective",
-            "forecast",
-            "predict",
-            "impact",
-            "measure",
-            "data",
-            "statistics",
-            "conversion",
-            "revenue",
-        ]
-
-        if any(keyword in message_lower for keyword in analytics_keywords):
-            self.logger.info(
-                "Handoff detected: analytics_evaluation (performance analysis request)"
+        try:
+            # Use LLM-driven handoff detection
+            handoff_info = await self.handoff_detector.detect_handoff(
+                current_agent="marketing_strategy",
+                user_message=message,
+                agent_analysis=result,
             )
-            handoff_info = {
-                "handoff_required": True,
-                "target_agent": "analytics_evaluation",
-                "handoff_reason": "strategy_validation_needed",
-                "context": {
-                    "analysis_type": "performance_validation",
-                    "user_message": message,
-                    "strategy_result": result,
-                    "recommendation": "Analytics team should perform data analysis and validation",
-                },
-            }
+
             return handoff_info
 
-        # Scenario 2: Customer Feedback / Insights → Customer Support Agent
-        # Keywords: customer feedback, support tickets, complaints, what customers say, pain points
-        customer_insight_keywords = [
-            "customer feedback",
-            "customer complaints",
-            "support tickets",
-            "what customers say",
-            "what are customers",
-            "customers saying",
-            "customer pain",
-            "pain points",
-            "customer problems",
-            "customer issues",
-            "customer experience",
-            "customers experiencing",
-            "customer satisfaction",
-        ]
-
-        if any(keyword in message_lower for keyword in customer_insight_keywords):
-            self.logger.info(
-                "Handoff detected: customer_support (customer insights request)"
-            )
-            handoff_info = {
-                "handoff_required": True,
-                "target_agent": "customer_support",
-                "handoff_reason": "customer_insights_needed",
-                "context": {
-                    "insight_type": "customer_feedback_analysis",
-                    "user_message": message,
-                    "strategy_result": result,
-                    "recommendation": "Customer Support should analyze feedback themes and sentiment",
-                },
-            }
-            return handoff_info
-
-        # Scenario 3: Strategy Optimization / Improvement → Feedback & Learning Agent
-        # Keywords: improve, optimize, not working, underperforming, better results, A/B test
-        optimization_keywords = [
-            "improve",
-            "optimize",
-            "optimization",
-            "not working",
-            "underperform",
-            "underperforming",
-            "better results",
-            "how can i improve",
-            "a/b test",
-            "experiment",
-            "test different",
-            "set up test",
-            "help me test",
-        ]
-
-        if any(keyword in message_lower for keyword in optimization_keywords):
-            self.logger.info(
-                "Handoff detected: feedback_learning (optimization request)"
-            )
-            handoff_info = {
-                "handoff_required": True,
-                "target_agent": "feedback_learning",
-                "handoff_reason": "optimization_needed",
-                "context": {
-                    "optimization_type": "strategy_improvement",
-                    "user_message": message,
-                    "strategy_result": result,
-                    "recommendation": "Learning agent should analyze historical performance and recommend improvements",
-                },
-            }
-            return handoff_info
-
-        self.logger.info("No handoff needed - standard marketing strategy query")
-        return {}
+        except Exception as e:
+            self.logger.error(f"Handoff detection failed: {e}", exc_info=True)
+            return {}

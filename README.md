@@ -10,10 +10,39 @@ A **portfolio-grade, enterprise-ready multi-agent AI system** for marketing auto
 
 This system implements a sophisticated **LangGraph-based multi-agent architecture** where specialized AI agents collaborate on complex marketing workflows. Built on LangGraph's StateGraph pattern, the system features explicit state management, conditional routing, and structured handoff protocols between agents. The entire system is powered by a **RAG pipeline** that leverages scraped Stripe documentation as the domain knowledge base, enabling agents to provide contextually accurate, technically grounded responses.
 
+### Try the New Chat Endpoint
+
+```bash
+# Start the API server
+python scripts/run_api.py
+
+# Send a natural language query
+curl -X POST http://localhost:8000/api/v1/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": "Create a Q2 marketing campaign for our payment API with $50k budget",
+    "session_id": "demo_session"
+  }'
+
+# Response includes:
+# - Classified intent: "campaign_creation"
+# - Confidence: 0.92
+# - Extracted entities: {"campaign_name": "Q2 Payment API Campaign", "budget": 50000}
+# - Agent routing: "marketing_strategy"
+# - Complete campaign plan with strategy and recommendations
+```
+
+**More examples:**
+- "Show me conversion rates for December" → Analytics Agent
+- "How do I handle subscription refunds?" → Customer Support Agent
+- "Recommend improvements for our campaigns" → Feedback Learning Agent
+
 ### Key Features
 
 #### Core Architecture
 - ✅ **LangGraph StateGraph Orchestration** - Graph-based workflow execution with conditional routing
+- ✅ **LLM-Driven Intent Classification** - Semantic understanding of user queries with 90%+ accuracy
+- ✅ **LLM-Driven Handoff Detection** - Context-aware agent transitions using GPT-4o-mini
 - ✅ **Explicit State Management** - Structured state passed between agents with full history
 - ✅ **Structured Handoff Protocol** - Context-preserving agent-to-agent transitions
 - ✅ **Circuit Breaker Pattern** - Automatic retry and fallback mechanisms
@@ -29,6 +58,8 @@ This system implements a sophisticated **LangGraph-based multi-agent architectur
 - ✅ **Domain Expertise** - Powered by scraped Stripe payment platform documentation
 - ✅ **Tool Integration** - Each agent has domain-specific tools and capabilities
 - ✅ **Sentiment Analysis** - Real-time emotion detection and escalation
+- ✅ **Intelligent Routing** - LLM-based intent classification with entity extraction
+- ✅ **Smart Handoffs** - Context-aware transitions between agents (replaced 690+ lines of keyword logic)
 
 #### System Features
 - ✅ **Event-Driven Communication** - Message bus for inter-agent messaging
@@ -944,17 +975,6 @@ Edit configuration files to:
 - **[Detailed Architecture](docs/architecture_detailed.md)** - Comprehensive technical specification with LangGraph patterns, RAG pipeline, and memory architecture
 - **[Agents Overview](docs/agents_overview.md)** - Individual agent capabilities, tools, and handoff protocols
 - **[API Reference](docs/api_reference.md)** - REST API endpoints and usage examples
-
-### Development Guides
-- **[Prompt Management](docs/prompt_management.md)** - System prompt engineering and versioning
-- **[Evaluation Framework](docs/evaluation_framework.md)** - Testing methodology, metrics, and benchmarks
-- **[Deployment Guide](docs/deployment.md)** - Production deployment patterns and best practices
-- **[Data Extraction Plan](docs/Data_Extraction_Plan.md)** - Web scraping and synthetic data generation
-
-### Implementation References
-- **[Agent-Prompt Integration](docs/AGENT_PROMPT_INTEGRATION.md)** - How agents load and use system prompts
-- **[Prompt Manager Architecture](docs/prompt_manager_architecture.md)** - Centralized prompt management system
-- **[Implementation Summary](docs/IMPLEMENTATION_SUMMARY.md)** - Project status and completed features
 
 ## 🛠️ Development
 

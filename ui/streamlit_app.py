@@ -10,11 +10,17 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import time
 import json
 from typing import Dict, List, Any, Optional
 import io
+import sys
+from pathlib import Path
+
+# Add src to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from src.marketing_agents.tools.synthetic_data_loader import load_execution_data
 
 # Page configuration
 st.set_page_config(
@@ -924,7 +930,7 @@ with tab3:
         st.error("⚠️ API is not available. Please start the API server.")
     else:
         # Workflow filters
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
 
         with col1:
             workflow_status = st.selectbox(
@@ -938,7 +944,14 @@ with tab3:
             )
 
         with col3:
-            if st.button("🔄 Refresh Workflows"):
+            auto_refresh = st.checkbox(
+                "🔄 Auto-refresh",
+                value=True,
+                help="Auto-refresh when workflows are in progress",
+            )
+
+        with col4:
+            if st.button("🔄 Refresh Now"):
                 st.rerun()
 
         st.markdown("---")
@@ -948,6 +961,17 @@ with tab3:
             status=None if workflow_status == "All" else workflow_status,
             limit=workflow_limit,
         )
+
+        # Check if any workflows are in progress
+        has_in_progress = any(
+            wf.get("status") in ["in_progress", "pending"] for wf in workflows
+        )
+
+        # Auto-refresh if enabled and workflows in progress
+        if auto_refresh and has_in_progress:
+            st.info("🔄 Auto-refreshing... (workflows in progress)")
+            time.sleep(2)  # Wait 2 seconds before refresh
+            st.rerun()
 
         if workflows:
             st.subheader(f"📋 Recent Workflows ({len(workflows)})")
@@ -959,16 +983,40 @@ with tab3:
                 duration_str = "N/A"
                 if wf.get("completed_at") and wf.get("started_at"):
                     try:
-                        start = datetime.fromisoformat(
-                            str(wf["started_at"]).replace("Z", "+00:00")
-                        )
-                        end = datetime.fromisoformat(
-                            str(wf["completed_at"]).replace("Z", "+00:00")
-                        )
+                        # Handle various datetime formats - preserve microseconds
+                        start_val = wf["started_at"]
+                        end_val = wf["completed_at"]
+
+                        # Convert to string if datetime object
+                        if isinstance(start_val, datetime):
+                            start = start_val
+                        else:
+                            start_str = str(start_val).replace("Z", "+00:00")
+                            start = datetime.fromisoformat(start_str)
+
+                        if isinstance(end_val, datetime):
+                            end = end_val
+                        else:
+                            end_str = str(end_val).replace("Z", "+00:00")
+                            end = datetime.fromisoformat(end_str)
+
                         duration_seconds = (end - start).total_seconds()
-                        duration_str = f"{duration_seconds:.1f}s"
-                    except:
-                        duration_str = "N/A"
+
+                        # Format duration nicely
+                        if duration_seconds == 0:
+                            # Timestamps are truly identical
+                            duration_str = "0ms"
+                        elif duration_seconds < 1:
+                            duration_str = f"{duration_seconds*1000:.0f}ms"
+                        elif duration_seconds < 60:
+                            duration_str = f"{duration_seconds:.1f}s"
+                        else:
+                            minutes = int(duration_seconds // 60)
+                            seconds = duration_seconds % 60
+                            duration_str = f"{minutes}m {seconds:.0f}s"
+                    except Exception as e:
+                        # Show what went wrong for debugging
+                        duration_str = f"Error: {type(e).__name__}"
                 elif wf.get("started_at") and wf.get("status") == "in_progress":
                     duration_str = "Running..."
                 else:
@@ -976,11 +1024,14 @@ with tab3:
 
                 # Calculate progress from agents_executed or status
                 progress = wf.get("progress", 0)
-                if progress == 0:
-                    status = wf.get("status", "")
-                    if status == "completed":
-                        progress = 100
-                    elif status == "in_progress":
+
+                # Always check status first for completed workflows
+                status = wf.get("status", "")
+                if status == "completed":
+                    progress = 100
+                elif progress == 0:
+                    # If no progress value but has status, estimate it
+                    if status == "in_progress":
                         # Estimate 50% if in progress
                         progress = 50
                     elif status == "pending":
@@ -1181,7 +1232,7 @@ with tab3:
                     # Execution Timeline Visualization
                     st.subheader("📊 Execution Timeline")
 
-                    # Build timeline from workflow details
+                    # Build timeline from workflow details ONLY
                     timeline_data = []
 
                     if workflow_details:
@@ -1215,11 +1266,15 @@ with tab3:
                         # Use agents_executed to build timeline
                         agents_executed = workflow_details.get("agents_executed", [])
                         if agents_executed:
-                            # Divide timeline equally among executed agents
-                            duration_per_agent = (
-                                total_duration / len(agents_executed)
-                                if agents_executed
-                                else 0
+                            # Divide timeline among agents with minimum 1 second per agent
+                            # This prevents fractional seconds in the display
+                            duration_per_agent = max(
+                                1.0,  # Minimum 1 second per agent
+                                (
+                                    total_duration / len(agents_executed)
+                                    if agents_executed
+                                    else 0
+                                ),
                             )
                             current_time = start_time
 
@@ -1229,7 +1284,7 @@ with tab3:
                                 )
                                 timeline_data.append(
                                     {
-                                        "Task": agent_name,
+                                        "Task": agent_name.replace("_", " ").title(),
                                         "Start": current_time.isoformat(),
                                         "Finish": agent_end.isoformat(),
                                         "Resource": "Completed",
@@ -1247,7 +1302,7 @@ with tab3:
                                 agent_end = current_time + timedelta(seconds=duration)
                                 timeline_data.append(
                                     {
-                                        "Task": agent_name,
+                                        "Task": agent_name.replace("_", " ").title(),
                                         "Start": current_time.isoformat(),
                                         "Finish": agent_end.isoformat(),
                                         "Resource": status.replace("_", " ").title(),
@@ -1255,14 +1310,24 @@ with tab3:
                                 )
                                 current_time = agent_end
                         else:
-                            # Show single workflow bar
+                            # Show single workflow bar with better labeling
                             workflow_type = workflow_details.get(
                                 "workflow_type", "Workflow"
                             )
                             status = workflow_details.get("status", "unknown")
+
+                            # Better display name
+                            display_name = workflow_type.replace("_", " ").title()
+                            if display_name == "Customer Support":
+                                display_name = "Customer Support Agent"
+                            elif display_name == "Marketing Strategy":
+                                display_name = "Marketing Strategy Agent"
+                            elif display_name == "Analytics Evaluation":
+                                display_name = "Analytics Agent"
+
                             timeline_data.append(
                                 {
-                                    "Task": workflow_type.replace("_", " ").title(),
+                                    "Task": display_name,
                                     "Start": start_time.isoformat(),
                                     "Finish": end_time.isoformat(),
                                     "Resource": status.replace("_", " ").title(),
@@ -1273,13 +1338,13 @@ with tab3:
                         # Fix labels: convert status to readable format
                         for item in timeline_data:
                             status = item["Resource"]
-                            if status == "in_progress":
+                            if status == "in_progress" or status == "In_Progress":
                                 item["Resource"] = "In Progress"
-                            elif status == "completed":
+                            elif status == "completed" or status == "Completed":
                                 item["Resource"] = "Completed"
-                            elif status == "pending":
+                            elif status == "pending" or status == "Pending":
                                 item["Resource"] = "Pending"
-                            elif status == "failed":
+                            elif status == "failed" or status == "Failed":
                                 item["Resource"] = "Failed"
 
                         fig = px.timeline(
@@ -1383,58 +1448,135 @@ with tab4:
         # Campaign Metrics Over Time
         st.subheader("📈 Campaign Metrics Over Time")
 
-        # Fetch workflows for campaign metrics
+        # Try to fetch workflows, fallback to synthetic data
         workflows = get_workflows(limit=100)
-
-        # Generate campaign data from actual workflows
-        dates = pd.date_range(start=start_date_input, end=end_date_input, freq="D")
         campaign_data_list = []
 
-        for date in dates:
-            # Count ONLY campaign_launch workflows on this date
-            day_workflows = [
-                wf
-                for wf in workflows
-                if wf.get("started_at", "").startswith(date.strftime("%Y-%m-%d"))
-                and wf.get("workflow_type") == "campaign_launch"
-            ]
+        # If no workflows or no campaign workflows, use synthetic execution data
+        campaign_workflows = (
+            [wf for wf in workflows if wf.get("workflow_type") == "campaign_launch"]
+            if workflows
+            else []
+        )
 
-            campaigns_launched = len(day_workflows)
+        if not campaign_workflows:
+            # Use synthetic execution data with campaign metrics
+            try:
+                exec_data = load_execution_data(time_range="30d", limit=200)
+                campaign_records = [
+                    r
+                    for r in exec_data
+                    if r.get("result", {}).get("metrics", {}).get("impressions")
+                    is not None
+                ]
 
-            # Calculate metrics for this day
-            if day_workflows:
-                statuses = [wf.get("status") for wf in day_workflows]
-                success_count = sum(1 for s in statuses if s == "completed")
-                success_rate = (success_count / len(statuses)) * 100 if statuses else 0
+                # Group by date and aggregate metrics
+                dates = pd.date_range(
+                    start=start_date_input, end=end_date_input, freq="D"
+                )
 
-                # Estimate engagement from workflow progress
-                engagement = sum(
-                    int(wf.get("progress", 0) * 100) for wf in day_workflows
-                ) // max(1, len(day_workflows))
-            else:
-                success_rate = 0
-                engagement = 0
+                for date in dates:
+                    date_str = date.strftime("%Y-%m-%d")
+                    day_records = [
+                        r
+                        for r in campaign_records
+                        if r.get("started_at", "").startswith(date_str)
+                    ]
 
-            campaign_data_list.append(
-                {
-                    "Date": date,
-                    "Campaigns Launched": campaigns_launched,
-                    "Success Rate": success_rate,
-                    "Engagement": engagement,
-                }
-            )
+                    if day_records:
+                        # Aggregate metrics
+                        total_impressions = sum(
+                            r.get("result", {}).get("metrics", {}).get("impressions", 0)
+                            for r in day_records
+                        )
+                        total_clicks = sum(
+                            r.get("result", {}).get("metrics", {}).get("clicks", 0)
+                            for r in day_records
+                        )
+                        ctr = (
+                            (total_clicks / total_impressions * 100)
+                            if total_impressions > 0
+                            else 0
+                        )
+
+                        campaign_data_list.append(
+                            {
+                                "Date": date,
+                                "Campaigns": len(day_records),
+                                "CTR": round(ctr, 2),
+                                "Impressions (K)": round(total_impressions / 1000, 1),
+                            }
+                        )
+                    else:
+                        campaign_data_list.append(
+                            {
+                                "Date": date,
+                                "Campaigns": 0,
+                                "CTR": 0,
+                                "Impressions (K)": 0,
+                            }
+                        )
+
+            except Exception as e:
+                st.warning(f"Could not load campaign data: {e}")
+        else:
+            # Use workflow data
+            dates = pd.date_range(start=start_date_input, end=end_date_input, freq="D")
+
+            for date in dates:
+                day_workflows = [
+                    wf
+                    for wf in campaign_workflows
+                    if wf.get("started_at", "").startswith(date.strftime("%Y-%m-%d"))
+                ]
+
+                campaigns_launched = len(day_workflows)
+
+                if day_workflows:
+                    statuses = [wf.get("status") for wf in day_workflows]
+                    success_count = sum(1 for s in statuses if s == "completed")
+                    success_rate = (
+                        (success_count / len(statuses)) * 100 if statuses else 0
+                    )
+                    engagement = sum(
+                        int(wf.get("progress", 0) * 100) for wf in day_workflows
+                    ) // max(1, len(day_workflows))
+                else:
+                    success_rate = 0
+                    engagement = 0
+
+                campaign_data_list.append(
+                    {
+                        "Date": date,
+                        "Campaigns": campaigns_launched,
+                        "Success Rate": success_rate,
+                        "Engagement": engagement,
+                    }
+                )
 
         campaign_data = pd.DataFrame(campaign_data_list)
 
-        if not campaign_data.empty and campaign_data["Campaigns Launched"].sum() > 0:
-            fig = px.line(
-                campaign_data,
-                x="Date",
-                y=["Campaigns Launched", "Engagement"],
-                title="Campaign Activity Over Time",
-                labels={"value": "Count", "variable": "Metric"},
-            )
-            st.plotly_chart(fig, use_container_width=True)
+        if (
+            not campaign_data.empty
+            and len([c for c in campaign_data.columns if c != "Date"]) > 0
+        ):
+            # Plot available metrics
+            metric_cols = [
+                c
+                for c in campaign_data.columns
+                if c != "Date" and campaign_data[c].sum() > 0
+            ]
+            if metric_cols:
+                fig = px.line(
+                    campaign_data,
+                    x="Date",
+                    y=metric_cols,
+                    title="Campaign Metrics Over Time",
+                    labels={"value": "Value", "variable": "Metric"},
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("No campaign activity in the selected date range.")
         else:
             st.info("No campaign data available for the selected date range.")
 
@@ -1443,19 +1585,54 @@ with tab4:
         # Agent Handoff Frequency Matrix
         st.subheader("🔄 Agent Handoff Frequency Matrix")
 
-        # Use previously fetched workflows for handoff analysis
+        # Fetch fresh workflow data for handoff analysis
+        all_workflows = get_workflows(limit=100)
+
+        # Debug info
+        if all_workflows:
+            st.caption(
+                f"Analyzing {len(all_workflows)} workflows for handoff patterns..."
+            )
+
+        # ONLY count handoffs from actual workflow executions (not synthetic/historical data)
         handoff_counts = {}
-        if workflows:
-            for workflow in workflows:
-                # Extract handoff sequence from workflow
-                if "state_transitions" in workflow:
+        total_transitions = 0
+        filtered_self_handoffs = 0
+
+        if all_workflows:
+            for workflow in all_workflows:
+                # Method 1: Extract from state_transitions if available
+                if "state_transitions" in workflow and workflow["state_transitions"]:
                     state_transitions = workflow.get("state_transitions", [])
                     for i in range(len(state_transitions) - 1):
+                        total_transitions += 1
                         from_agent = state_transitions[i].get("agent_name", "Unknown")
                         to_agent = state_transitions[i + 1].get("agent_name", "Unknown")
 
-                        key = f"{from_agent}-{to_agent}"
-                        handoff_counts[key] = handoff_counts.get(key, 0) + 1
+                        # Only count if different agents (no self-handoffs)
+                        if (
+                            from_agent != to_agent
+                            and from_agent != "Unknown"
+                            and to_agent != "Unknown"
+                        ):
+                            key = f"{from_agent}-{to_agent}"
+                            handoff_counts[key] = handoff_counts.get(key, 0) + 1
+                        elif from_agent == to_agent and from_agent != "Unknown":
+                            filtered_self_handoffs += 1
+
+                # Method 2: Check for explicit handoff flag in result
+                elif workflow.get("result", {}).get("handoff_required"):
+                    result = workflow.get("result", {})
+                    agents_executed = workflow.get("agents_executed", [])
+                    target_agent = result.get("target_agent")
+
+                    if len(agents_executed) > 0 and target_agent:
+                        from_agent = agents_executed[-1].replace("_", " ").title()
+                        to_agent = target_agent.replace("_", " ").title()
+
+                        if from_agent != to_agent:
+                            key = f"{from_agent}-{to_agent}"
+                            handoff_counts[key] = handoff_counts.get(key, 0) + 1
 
         # Build dataframe from actual handoffs
         if handoff_counts:
@@ -1468,23 +1645,95 @@ with tab4:
 
             handoff_df = pd.DataFrame(handoff_data)
 
-            # Create pivot table for heatmap
-            handoff_matrix = handoff_df.pivot_table(
-                index="From", columns="To", values="Count", fill_value=0
-            )
+            # Create appealing chord/arc diagram style visualization
+            st.subheader("🔄 Agent Collaboration Network")
 
-            fig = px.imshow(
-                handoff_matrix,
-                labels=dict(x="To Agent", y="From Agent", color="Handoffs"),
-                title="Agent Handoff Heatmap",
-                color_continuous_scale="Blues",
-                text_auto=True,
-            )
-            st.plotly_chart(fig, use_container_width=True)
+            # Filter out self-loops for cleaner visualization
+            handoff_df_filtered = handoff_df[
+                handoff_df["From"] != handoff_df["To"]
+            ].copy()
+
+            if not handoff_df_filtered.empty:
+                # Create a clean bar chart showing handoff patterns
+                handoff_df_filtered["Flow"] = (
+                    handoff_df_filtered["From"] + " → " + handoff_df_filtered["To"]
+                )
+                handoff_df_sorted = handoff_df_filtered.sort_values(
+                    "Count", ascending=True
+                )
+
+                fig_flow = px.bar(
+                    handoff_df_sorted,
+                    x="Count",
+                    y="Flow",
+                    orientation="h",
+                    title="Agent-to-Agent Handoff Frequency",
+                    labels={"Count": "Number of Handoffs", "Flow": "Agent Flow"},
+                    color="Count",
+                    color_continuous_scale="Blues",
+                    height=max(300, len(handoff_df_sorted) * 40),
+                )
+
+                fig_flow.update_layout(
+                    showlegend=False,
+                    xaxis_title="Handoff Count",
+                    yaxis_title="",
+                    font=dict(size=12),
+                    margin=dict(l=200, r=20, t=50, b=50),
+                )
+
+                fig_flow.update_traces(
+                    marker=dict(line=dict(color="#000000", width=1)),
+                    texttemplate="%{x}",
+                    textposition="outside",
+                )
+
+                st.plotly_chart(fig_flow, use_container_width=True)
+            else:
+                st.info(
+                    "No inter-agent handoffs detected yet. All workflows completed within a single agent."
+                )
+
+            # Show summary statistics
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Total Handoffs", handoff_df["Count"].sum())
+            with col2:
+                most_common = handoff_df.nlargest(1, "Count")
+                if not most_common.empty:
+                    st.metric(
+                        "Most Common Handoff",
+                        f"{most_common.iloc[0]['From']} → {most_common.iloc[0]['To']}",
+                        delta=f"{most_common.iloc[0]['Count']} times",
+                    )
+            with col3:
+                st.metric("Unique Agent Pairs", len(handoff_df))
+
+            # Optional: Show detailed breakdown table
+            with st.expander("📊 View Detailed Handoff Statistics"):
+                st.dataframe(
+                    handoff_df.sort_values("Count", ascending=False),
+                    use_container_width=True,
+                    hide_index=True,
+                )
         else:
-            st.info(
-                "📊 No handoff data available. Run workflows with multiple agents to generate handoff statistics."
-            )
+            # Show debug info about why no handoffs were found
+            if all_workflows:
+                if total_transitions > 0:
+                    st.info(
+                        f"📊 Analyzed {len(all_workflows)} workflows with {total_transitions} agent transitions. "
+                        f"Filtered out {filtered_self_handoffs} self-handoffs. "
+                        f"No inter-agent handoffs detected - all workflows completed within a single agent or had only self-handoffs."
+                    )
+                else:
+                    st.info(
+                        f"📊 Analyzed {len(all_workflows)} workflows but found no state transitions. "
+                        f"Workflows may not have completed yet or may not have handoff data."
+                    )
+            else:
+                st.info(
+                    "📊 No workflow data available. Run workflows with multiple agents to generate handoff statistics."
+                )
 
         st.markdown("---")
 

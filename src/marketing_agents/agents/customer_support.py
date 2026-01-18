@@ -11,6 +11,7 @@ import asyncio
 from langchain_core.messages import SystemMessage, HumanMessage
 
 from ..core.base_agent import BaseAgent, AgentStatus, HandoffRequest
+from ..core.handoff_detector import HandoffDetector
 from ..tools.kb_search import KnowledgeBaseSearchTool
 from ..tools.sentiment_analysis import SentimentAnalyzer
 
@@ -41,6 +42,14 @@ class CustomerSupportAgent(BaseAgent):
         # Initialize tools
         self.kb_search_tool = KnowledgeBaseSearchTool()
         self.sentiment_analyzer = SentimentAnalyzer()
+
+        # Initialize handoff detector with config from orchestrator
+        handoff_config = (
+            self.config.get("agents", {})
+            .get("orchestrator", {})
+            .get("handoff_detector")
+        )
+        self.handoff_detector = HandoffDetector(llm=self.llm, config=handoff_config)
 
         # SLA configurations (in hours)
         self.sla_hours = {
@@ -108,7 +117,7 @@ class CustomerSupportAgent(BaseAgent):
             tone = response_data.get("tone", "professional")
 
             # Step 4: Check if handoff is needed
-            handoff_info = self._detect_handoff_need(
+            handoff_info = await self._detect_handoff_need(
                 message=message, sentiment=sentiment, kb_results=kb_results
             )
 
@@ -650,19 +659,14 @@ Generate a helpful response that addresses the customer's query using the docume
                 "error": str(e),
             }
 
-    def _detect_handoff_need(
+    async def _detect_handoff_need(
         self,
         message: str,
         sentiment: Dict[str, Any],
         kb_results: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
         """
-        Detect if customer support request warrants a handoff to another agent.
-
-        Analyzes the customer message, sentiment, and context to determine if:
-        - Campaign/marketing issue detected (→ Marketing Strategy)
-        - Trend analysis needed (→ Analytics & Evaluation)
-        - Recurring issue/knowledge gap (→ Feedback & Learning)
+        Detect if customer support request warrants a handoff to another agent using LLM reasoning.
 
         Args:
             message: Customer message text
@@ -672,204 +676,27 @@ Generate a helpful response that addresses the customer's query using the docume
         Returns:
             Dictionary with handoff information if needed, empty dict otherwise
         """
-        handoff_info = {}
-        message_lower = message.lower()
-
-        self.logger.info(f"Checking handoff need for message: '{message[:100]}'")
-
-        # Scenario 1: Campaign/Promotion Issues → Marketing Strategy Agent
-        # Keywords: campaign, promotion, email, advertisement, discount, offer, Black Friday, etc.
-        campaign_keywords = [
-            "campaign",
-            "promotion",
-            "promo",
-            "discount code",
-            "coupon",
-            "email said",
-            "email mentioned",
-            "advertisement",
-            "marketing message",
-            "black friday",
-            "cyber monday",
-            "sale",
-            "offer",
-            "newsletter",
-            "marketing",
-        ]
-
-        if any(keyword in message_lower for keyword in campaign_keywords):
-            self.logger.info(
-                "Handoff detected: marketing_strategy (campaign/promotion keywords)"
-            )
-            handoff_info = {
-                "handoff_required": True,
-                "target_agent": "marketing_strategy",
-                "handoff_reason": "campaign_issue_detected",
-                "context": {
-                    "issue_type": "campaign_execution_problem",
-                    "customer_message": message,
-                    "sentiment": sentiment.get("sentiment", "neutral"),
-                    "urgency": sentiment.get("urgency_level", "medium"),
-                    "recommendation": "Marketing team should investigate campaign execution and messaging",
-                },
+        try:
+            # Build context for handoff detection
+            analysis_context = {
+                "sentiment": sentiment,
+                "kb_results_count": len(kb_results),
+                "kb_confidence": (
+                    sum(r.get("score", 0) for r in kb_results) / len(kb_results)
+                    if kb_results
+                    else 0.0
+                ),
             }
+
+            # Use LLM-driven handoff detection
+            handoff_info = await self.handoff_detector.detect_handoff(
+                current_agent="customer_support",
+                user_message=message,
+                agent_analysis=analysis_context,
+            )
+
             return handoff_info
 
-        # Scenario 2: Customer Insight/Feature Demand Pattern → Marketing Strategy Agent
-        # Keywords: multiple customers, many clients, feature request, competitors have, market demand
-        insight_keywords = [
-            "multiple customers",
-            "many customers",
-            "multiple clients",
-            "many clients",
-            "other customers",
-            "other clients",
-            "everyone is asking",
-            "clients are asking",
-            "customers are asking",
-            "feature request",
-            "competitive feature",
-            "competitor",
-            "market demand",
-            "industry standard",
-            "other platforms",
-            "missing feature",
-        ]
-
-        if any(keyword in message_lower for keyword in insight_keywords):
-            self.logger.info(
-                "Handoff detected: marketing_strategy (customer insight pattern)"
-            )
-            handoff_info = {
-                "handoff_required": True,
-                "target_agent": "marketing_strategy",
-                "handoff_reason": "strategic_insight_found",
-                "context": {
-                    "type": "market_analysis",
-                    "insight_type": "customer_demand_pattern",
-                    "customer_message": message,
-                    "sentiment": sentiment.get("sentiment", "neutral"),
-                    "recommendation": "Marketing should evaluate strategic opportunity and market positioning",
-                },
-            }
-            return handoff_info
-
-        # Scenario 3: Trend Analysis Request → Analytics & Evaluation Agent
-        # Keywords: analyze, trend, pattern, statistics, data shows, metrics, increase, decrease
-        analytics_keywords = [
-            "analyze",
-            "analysis",
-            "trend",
-            "pattern",
-            "statistics",
-            "data shows",
-            "metrics",
-            "increased",
-            "decreased",
-            "abandonment",
-            "conversion",
-            "funnel",
-            "performance",
-            "what are customers saying",
-            "what customers are saying",
-            "generally saying",
-            "overall feedback",
-            "sentiment",
-            "reviews",
-        ]
-
-        if any(keyword in message_lower for keyword in analytics_keywords):
-            self.logger.info(
-                "Handoff detected: analytics_evaluation (trend analysis request)"
-            )
-            handoff_info = {
-                "handoff_required": True,
-                "target_agent": "analytics_evaluation",
-                "handoff_reason": "analytics_required",
-                "context": {
-                    "analysis_type": "trend_analysis_requested",
-                    "customer_message": message,
-                    "sentiment": sentiment.get("sentiment", "neutral"),
-                    "recommendation": "Analytics team should perform deep dive analysis",
-                },
-            }
-            return handoff_info
-
-        # Scenario 4: Recurring System Issue → Feedback & Learning Agent
-        # Keywords: recurring, keeps happening, third time, always, again, still having
-        recurring_keywords = [
-            "recurring",
-            "keeps happening",
-            "keep having",
-            "third time",
-            "second time",
-            "multiple times",
-            "always having",
-            "always fails",
-            "consistently",
-            "again",
-            "still having",
-            "same issue",
-            "same problem",
-        ]
-
-        if any(keyword in message_lower for keyword in recurring_keywords):
-            self.logger.info(
-                "Handoff detected: feedback_learning (recurring issue pattern)"
-            )
-            handoff_info = {
-                "handoff_required": True,
-                "target_agent": "feedback_learning",
-                "handoff_reason": "system_improvement_identified",
-                "context": {
-                    "pattern_type": "recurring_issue",
-                    "customer_message": message,
-                    "sentiment": sentiment.get("sentiment", "neutral"),
-                    "urgency": sentiment.get("urgency_level", "high"),
-                    "recommendation": "Learning agent should analyze root cause and implement systemic fix",
-                },
-            }
-            return handoff_info
-
-        # Scenario 5: Knowledge Base Gap → Feedback & Learning Agent
-        # Check if KB search returned low confidence or customer explicitly mentions missing docs
-        kb_confidence = (
-            sum(r.get("score", 0) for r in kb_results) / len(kb_results)
-            if kb_results
-            else 0.0
-        )
-
-        documentation_gap_keywords = [
-            "couldn't find",
-            "can't find",
-            "documentation missing",
-            "no guide",
-            "not in docs",
-            "not documented",
-            "no documentation",
-            "where is the doc",
-            "docs don't explain",
-        ]
-
-        if kb_confidence < 0.4 or any(
-            keyword in message_lower for keyword in documentation_gap_keywords
-        ):
-            self.logger.info(
-                f"Handoff detected: feedback_learning (knowledge gap, confidence: {kb_confidence:.2f})"
-            )
-            handoff_info = {
-                "handoff_required": True,
-                "target_agent": "feedback_learning",
-                "handoff_reason": "system_improvement_identified",
-                "context": {
-                    "pattern_type": "knowledge_base_gap",
-                    "customer_message": message,
-                    "kb_confidence": kb_confidence,
-                    "kb_results_count": len(kb_results),
-                    "recommendation": "Learning agent should prioritize documentation creation or improvement",
-                },
-            }
-            return handoff_info
-
-        self.logger.info("No handoff needed - standard support query")
-        return {}
+        except Exception as e:
+            self.logger.error(f"Handoff detection failed: {e}", exc_info=True)
+            return {}

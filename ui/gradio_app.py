@@ -19,12 +19,16 @@ from typing import Dict, Any, List, Tuple, Optional
 from pathlib import Path
 import sys
 import time
+import logging
 
 # Add project root to path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from config.settings import get_settings
+
+# Initialize logger
+logger = logging.getLogger(__name__)
 
 # Initialize settings
 settings = get_settings()
@@ -79,227 +83,36 @@ class AgentChatInterface:
 
         return formatted_content
 
-    def detect_intent_and_route(
-        self, message: str, agent_choice: str
-    ) -> Tuple[str, str]:
+    async def classify_intent(self, message: str) -> Dict[str, Any]:
         """
-        Detect user intent and route to appropriate workflow.
+        Classify user intent using the new LLM-based chat endpoint.
 
         Returns:
-            Tuple of (workflow_type, agent_name)
+            Dict with intent, confidence, agent routing info
         """
-        message_lower = message.lower()
-
-        # Auto routing
-        if agent_choice == "Auto":
-            # Feedback/Learning keywords - Check FIRST (highest priority for learning queries)
-            # Performance evaluation queries
-            if any(
-                keyword in message_lower
-                for keyword in [
-                    "how well is",
-                    "how is the",
-                    "agent performing",
-                    "agent performance",
-                    "performance of",
-                    "evaluate agent",
-                    "agent evaluation",
-                ]
-            ):
-                return "feedback_learning", "Feedback Learning Agent"
-
-            # Learning from data queries
-            elif any(
-                keyword in message_lower
-                for keyword in [
-                    "what should we learn",
-                    "what can we learn",
-                    "what did we learn",
-                    "learn from this",
-                    "learn from",
-                    "takeaways from",
-                    "lessons from",
-                ]
-            ):
-                return "feedback_learning", "Feedback Learning Agent"
-
-            # Issue investigation queries
-            elif any(
-                keyword in message_lower
-                for keyword in [
-                    "multiple agents",
-                    "several agents",
-                    "agents are reporting",
-                    "agents report",
-                    "investigate and",
-                    "investigate the",
-                    "recurring issue",
-                    "recurring problem",
-                    "keeps happening",
-                    "happening again",
-                ]
-            ):
-                return "feedback_learning", "Feedback Learning Agent"
-
-            # User feedback and ratings
-            elif any(
-                keyword in message_lower
-                for keyword in [
-                    "rating",
-                    "stars",
-                    "/5",
-                    "quality of the",
-                    "rate the",
-                    "too generic",
-                    "not specific enough",
-                    "feedback on",
-                ]
-            ):
-                return "feedback_learning", "Feedback Learning Agent"
-
-            # System improvement queries
-            elif any(
-                keyword in message_lower
-                for keyword in [
-                    "improve prediction",
-                    "improve forecast",
-                    "improve accuracy",
-                    "optimize system",
-                    "system improvement",
-                    "how can we improve",
-                    "ways to improve",
-                ]
-            ):
-                return "feedback_learning", "Feedback Learning Agent"
-
-            # Analytics keywords - Check for pure analysis/reporting requests
-            elif any(
-                keyword in message_lower
-                for keyword in [
-                    "analyze performance",
-                    "show me metrics",
-                    "generate report",
-                    "create dashboard",
-                    "create a report",
-                    "view statistics",
-                    "display data",
-                    "calculate roi",
-                    "measure conversion",
-                    "track funnel",
-                    "customer journey map",
-                    "attribution model",
-                    "a/b test results",
-                    "experiment results",
-                ]
-            ):
-                return "analytics", "Analytics Agent"
-
-            # Campaign/Strategy keywords - Check for campaign creation/planning
-            elif any(
-                keyword in message_lower
-                for keyword in [
-                    "launch a campaign",
-                    "launch campaign",
-                    "create a campaign",
-                    "create campaign",
-                    "new campaign",
-                    "plan a campaign",
-                    "plan campaign",
-                    "campaign strategy",
-                    "marketing strategy",
-                    "content calendar",
-                    "editorial calendar",
-                    "content plan",
-                    "email sequence",
-                    "nurture sequence",
-                    "drip campaign",
-                    "market research",
-                    "competitive analysis",
-                    "go-to-market",
-                    "gtm strategy",
-                ]
-            ):
-                return "campaign_launch", "Marketing Strategy Agent"
-
-            # Support/KB keywords - Help and documentation queries
-            elif any(
-                keyword in message_lower
-                for keyword in [
-                    "how do i",
-                    "how does",
-                    "how to",
-                    "what is",
-                    "explain how",
-                    "documentation for",
-                    "help me with",
-                    "support ticket",
-                    "customer issue with",
-                ]
-            ):
-                return "customer_support", "Customer Support Agent"
-
-            # Default to feedback learning for improvement-related queries
-            elif any(
-                keyword in message_lower
-                for keyword in [
-                    "improve",
-                    "better",
-                    "enhance",
-                    "optimize",
-                ]
-            ):
-                return "feedback_learning", "Feedback Learning Agent"
-
-            # Default to support for questions
-            else:
-                return "customer_support", "Customer Support Agent"
-
-        # Manual routing
-        else:
-            agent_mapping = {
-                "Marketing Strategy": ("campaign_launch", "Marketing Strategy Agent"),
-                "Customer Support": ("customer_support", "Customer Support Agent"),
-                "Analytics": ("analytics", "Analytics Agent"),
-                "Feedback Learning": ("feedback_learning", "Feedback Learning Agent"),
-            }
-            return agent_mapping.get(
-                agent_choice, ("customer_support", "Customer Support Agent")
+        try:
+            response = await self.client.post(
+                f"{API_BASE_URL}/chat", json={"message": message}
             )
 
-    async def poll_workflow_status(
-        self, workflow_id: str, max_attempts: int = 60
-    ) -> Dict[str, Any]:
-        """
-        Poll workflow status until completion.
-
-        Args:
-            workflow_id: Workflow ID to poll
-            max_attempts: Maximum polling attempts
-
-        Returns:
-            Final workflow result
-        """
-        for _ in range(max_attempts):
-            try:
-                response = await self.client.get(
-                    f"{API_BASE_URL}/workflows/status/{workflow_id}"
-                )
-                if response.status_code == 200:
-                    data = response.json()
-
-                    if data.get("status") == "completed":
-                        return data
-                    elif data.get("status") == "failed":
-                        raise Exception(
-                            f"Workflow failed: {data.get('error', 'Unknown error')}"
-                        )
-
-                await asyncio.sleep(2)  # Poll every 2 seconds
-            except httpx.HTTPError as e:
-                await asyncio.sleep(2)
-                continue
-
-        raise TimeoutError("Workflow did not complete in time")
+            if response.status_code == 200:
+                return response.json()
+            else:
+                # Fallback to default
+                return {
+                    "intent": "general_inquiry",
+                    "agent": "customer_support",
+                    "confidence": 0.5,
+                    "message": "Unable to classify intent, routing to customer support.",
+                }
+        except Exception as e:
+            logger.error(f"Intent classification error: {e}")
+            return {
+                "intent": "general_inquiry",
+                "agent": "customer_support",
+                "confidence": 0.5,
+                "message": f"Error during classification: {str(e)}",
+            }
 
     async def stream_response(
         self,
@@ -309,235 +122,98 @@ class AgentChatInterface:
         conversation_id: str,
     ):
         """
-        Stream agent response with intermediate updates.
+        Stream agent response using the new unified chat endpoint.
 
         Yields:
             Tuple of (history, status, metrics)
         """
         try:
-            # Detect workflow and agent
-            workflow_type, agent_name = self.detect_intent_and_route(
-                message, agent_choice
-            )
-
             # Add user message to history (Gradio 6.0 format)
             history = history + [{"role": "user", "content": message}]
-            yield history, f"🔄 Routing to {agent_name}...", {}
+            yield history, "🔄 Classifying intent...", {}
 
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.3)
 
-            # Create workflow payload
-            workflow_id = str(uuid.uuid4())
-            self.current_workflow_id = workflow_id
+            # Use the new unified chat endpoint
+            yield history, "⚙️ Processing with AI agents...", {}
 
-            # Prepare request based on workflow type
-            if workflow_type == "campaign_launch":
-                payload = {
-                    "campaign_name": "AI-Generated Campaign",
-                    "objectives": ["awareness", "leads"],
-                    "target_audience": "Business decision makers",
-                    "budget": 10000.0,
-                    "duration_weeks": 8,
-                    "additional_context": {"user_query": message},
-                }
-                endpoint = f"{API_BASE_URL}/workflows/campaign-launch"
-
-            elif workflow_type == "customer_support":
-                payload = {
-                    "inquiry": message,
-                    "customer_id": f"user_{conversation_id[:8]}",
-                    "urgency": "normal",
-                }
-                endpoint = f"{API_BASE_URL}/workflows/customer-support"
-
-            elif workflow_type == "analytics":
-                payload = {
-                    "report_type": "campaign_performance",
-                    "date_range": {"start": "2026-01-01", "end": "2026-01-31"},
-                    "metrics": ["conversion_rate", "roi", "engagement"],
-                    "filters": {"user_query": message},
-                }
-                endpoint = f"{API_BASE_URL}/workflows/analytics"
-
-            elif workflow_type == "feedback_learning":
-                # Determine request type based on message content
-                # Check in priority order (most specific first)
-                request_type = "analyze_feedback"
-                message_lower = message.lower()
-
-                # Issue investigation - CHECK FIRST (highest priority)
-                if any(
-                    keyword in message_lower
-                    for keyword in [
-                        "investigate",
-                        "issues",
-                        "recurring",
-                        "pattern",
-                        "multiple agents",
-                        "several agents",
-                    ]
-                ):
-                    request_type = "detect_patterns"
-                # Performance evaluation
-                elif any(
-                    keyword in message_lower
-                    for keyword in [
-                        "how well is",
-                        "agent performing",
-                        "performance of",
-                        "agent performance",
-                    ]
-                ):
-                    request_type = "analyze_feedback"
-                # User ratings/feedback
-                elif any(
-                    keyword in message_lower
-                    for keyword in ["rate", "rating", "stars", "quality", "/5"]
-                ):
-                    request_type = "analyze_feedback"
-                # Prediction/accuracy improvement (LAST - least priority)
-                elif any(
-                    keyword in message_lower
-                    for keyword in [
-                        "improve prediction",
-                        "prediction accuracy",
-                        "forecast accuracy",
-                    ]
-                ):
-                    request_type = "prediction_improvement"
-
-                payload = {
-                    "message": message,
-                    "request_type": request_type,
-                    "time_range": "last_7_days",
-                    "context": {
-                        "source": "user_feedback",
-                        "conversation_id": conversation_id,
-                    },
-                }
-                endpoint = f"{API_BASE_URL}/workflows/feedback-learning"
-
-            else:
-                # Fallback to customer support
-                payload = {
-                    "inquiry": message,
-                    "customer_id": f"user_{conversation_id[:8]}",
-                    "urgency": "normal",
-                }
-                endpoint = f"{API_BASE_URL}/workflows/customer-support"
-
-            # Update status
-            yield history, f"⚙️ Processing with {agent_name}...", {}
-
-            # Make API request (uses default timeout of 300s)
-            response = await self.client.post(endpoint, json=payload)
+            # Make API request to unified chat endpoint
+            response = await self.client.post(
+                f"{API_BASE_URL}/chat", json={"message": message}
+            )
 
             if response.status_code == 200:
                 result = response.json()
-                workflow_id = result.get("workflow_id")
 
-                # Update status
-                yield history, f"⏳ Workflow started (ID: {workflow_id[:8]}...)...", {}
+                # Extract response data
+                response_message = result.get("message", "No response available")
+                agent_name = result.get("agent", "unknown")
+                intent = result.get("intent", "unknown")
+                confidence = result.get("confidence", 0.0)
+                workflow_id = result.get("workflow_id", "")
+                agents_executed = result.get("agents_executed", [])
+                handoffs = result.get("handoffs", [])
 
-                # Poll for completion
-                intermediate_count = 0
-                while (
-                    intermediate_count < 150
-                ):  # Max 150 polls = 300 seconds (5 minutes)
-                    try:
-                        status_response = await self.client.get(
-                            f"{API_BASE_URL}/workflows/{workflow_id}"
-                        )
+                # Determine primary agent (first in chain) vs final agent
+                primary_agent = agents_executed[0] if agents_executed else agent_name
+                final_agent = agents_executed[-1] if agents_executed else agent_name
 
-                        if status_response.status_code == 200:
-                            status_data = status_response.json()
-                            current_status = status_data.get("status")
+                # Determine primary agent (first in chain) vs final agent
+                primary_agent = agents_executed[0] if agents_executed else agent_name
 
-                            if current_status == "completed":
-                                # Get final result
-                                result_response = await self.client.get(
-                                    f"{API_BASE_URL}/workflows/{workflow_id}/results"
-                                )
+                # Format the response
+                formatted_response = f"{response_message}"
 
-                                if result_response.status_code == 200:
-                                    final_result = result_response.json()
-
-                                    # API returns results key, not result
-                                    result_data = final_result.get(
-                                        "results", final_result.get("result", {})
-                                    )
-
-                                    # Check if we need to unwrap further
-                                    if isinstance(result_data, dict):
-                                        if "final_result" in result_data:
-                                            result_data = result_data["final_result"]
-                                        elif "result" in result_data:
-                                            result_data = result_data["result"]
-
-                                    # Format response
-                                    response_text = self.format_workflow_result(
-                                        result_data, workflow_type
-                                    )
-
-                                    # Add agent handoffs if present
-                                    if "agent_transitions" in result_data:
-                                        handoff_text = "\n\n### Agent Handoffs:\n"
-                                        for transition in result_data[
-                                            "agent_transitions"
-                                        ]:
-                                            handoff_text += f"- {transition.get('from_agent', 'Start')} → {transition.get('to_agent', 'End')}\n"
-                                        response_text += handoff_text
-
-                                    # Update history with final response (Gradio 6.0 format)
-                                    history = history + [
-                                        {"role": "assistant", "content": response_text}
-                                    ]
-
-                                    # Extract metrics
-                                    metrics = {
-                                        "workflow_id": workflow_id,
-                                        "duration": result_data.get("duration", "N/A"),
-                                        "agent_count": len(
-                                            result_data.get("agent_transitions", [])
-                                        ),
-                                        "status": "completed",
-                                    }
-
-                                    yield history, "✅ Complete", metrics
-                                    return
-
-                            elif current_status == "failed":
-                                error_msg = status_data.get("error", "Unknown error")
-                                history = history + [
-                                    {
-                                        "role": "assistant",
-                                        "content": f"❌ Error: {error_msg}",
-                                    }
-                                ]
-                                yield history, "❌ Failed", {"error": error_msg}
-                                return
-
-                            elif current_status == "in_progress":
-                                # Show intermediate progress
-                                agent_info = status_data.get(
-                                    "current_agent", "Processing"
-                                )
-                                yield history, f"⚙️ {agent_info}...", {}
-
-                    except httpx.HTTPError:
-                        pass
-
-                    await asyncio.sleep(2)
-                    intermediate_count += 1
-
-                # Timeout
-                history = history + [
-                    {
-                        "role": "assistant",
-                        "content": "⏱️ Workflow is taking longer than expected. Please check status later.",
-                    }
+                # Add metadata section
+                metadata_lines = [
+                    "\n\n---",
+                    f"**Intent:** {intent} (confidence: {confidence:.0%})",
+                    f"**Primary Agent:** {primary_agent}",
                 ]
-                yield history, "⏱️ Timeout", {"workflow_id": workflow_id}
+
+                if len(agents_executed) > 1:
+                    metadata_lines.append(
+                        f"**Agents Executed:** {', '.join(agents_executed)}"
+                    )
+
+                if handoffs:
+                    # Filter out self-handoffs (A → A)
+                    valid_handoffs = [
+                        h for h in handoffs if h.get("from") != h.get("to")
+                    ]
+
+                    if valid_handoffs:
+                        handoff_text = "**Handoffs:** "
+                        handoff_descriptions = []
+                        for handoff in valid_handoffs:
+                            from_agent = handoff.get("from", "Start")
+                            to_agent = handoff.get("to", "End")
+                            handoff_descriptions.append(f"{from_agent} → {to_agent}")
+                        handoff_text += ", ".join(handoff_descriptions)
+                        metadata_lines.append(handoff_text)
+
+                if workflow_id:
+                    metadata_lines.append(f"**Workflow ID:** {workflow_id[:12]}...")
+
+                formatted_response += "\n".join(metadata_lines)
+
+                # Update history with final response
+                history = history + [
+                    {"role": "assistant", "content": formatted_response}
+                ]
+
+                # Extract metrics
+                metrics = {
+                    "workflow_id": workflow_id,
+                    "intent": intent,
+                    "confidence": f"{confidence:.0%}",
+                    "agent": agent_name,
+                    "agents_executed": len(agents_executed),
+                    "handoffs": len(handoffs),
+                    "status": "completed",
+                }
+
+                yield history, "✅ Complete", metrics
 
             else:
                 error_msg = f"API Error: {response.status_code}"
@@ -552,502 +228,16 @@ class AgentChatInterface:
                 ]
                 yield history, "❌ Error", {"error": error_msg}
 
+        except httpx.TimeoutException:
+            error_msg = "Request timeout. The operation took too long."
+            history = history + [{"role": "assistant", "content": f"⏱️ {error_msg}"}]
+            yield history, "⏱️ Timeout", {"error": error_msg}
+
         except Exception as e:
             error_msg = f"Error: {str(e)}"
+            logger.error(f"Stream response error: {e}", exc_info=True)
             history = history + [{"role": "assistant", "content": f"❌ {error_msg}"}]
             yield history, "❌ Error", {"error": str(e)}
-
-    def format_workflow_result(self, result: Dict[str, Any], workflow_type: str) -> str:
-        """Format workflow result for display."""
-        # Debug logging
-        print(
-            f"[DEBUG] format_workflow_result called with workflow_type={workflow_type}"
-        )
-        print(f"[DEBUG] result type: {type(result)}")
-        print(
-            f"[DEBUG] result keys: {result.keys() if isinstance(result, dict) else 'N/A'}"
-        )
-        if isinstance(result, dict) and "analytics" in result:
-            print(
-                f"[DEBUG] Analytics found! Keys in analytics: {result['analytics'].keys() if isinstance(result['analytics'], dict) else 'N/A'}"
-            )
-
-        if not result:
-            return "No result available."
-
-        formatted = ""
-
-        # Handle marketing strategy results
-        if "strategy" in result:
-            strategy = result["strategy"]
-            formatted += "# Marketing Strategy\n\n"
-
-            # Campaign name
-            if strategy.get("campaign_name"):
-                formatted += f"## {strategy['campaign_name']}\n\n"
-
-            # Objectives
-            if strategy.get("objectives"):
-                formatted += "### 🎯 Campaign Objectives\n\n"
-                objectives = strategy["objectives"]
-                if isinstance(objectives, list):
-                    for obj in objectives:
-                        formatted += f"- {obj}\n"
-                else:
-                    formatted += str(objectives)
-                formatted += "\n\n"
-
-            # Target Audience
-            if strategy.get("target_audience"):
-                formatted += "### 👥 Target Audience\n\n"
-                audience = strategy["target_audience"]
-                if isinstance(audience, dict):
-                    segments = audience.get("segments", [])
-                    if segments:
-                        for i, segment in enumerate(segments, 1):
-                            if isinstance(segment, dict):
-                                formatted += f"**Segment {i}:** {segment.get('name', 'Unnamed')}\n"
-                                if segment.get("description"):
-                                    formatted += f"- {segment['description']}\n"
-                                if segment.get("size"):
-                                    formatted += f"- Size: {segment['size']}\n"
-                            else:
-                                formatted += f"- {segment}\n"
-                    else:
-                        formatted += str(audience)
-                else:
-                    formatted += str(audience)
-                formatted += "\n\n"
-
-            # Channels
-            if strategy.get("channels"):
-                formatted += "### 📢 Marketing Channels\n\n"
-                channels = strategy["channels"]
-                if isinstance(channels, dict):
-                    channel_list = channels.get("channels", [])
-                    for channel in channel_list:
-                        if isinstance(channel, dict):
-                            formatted += f"**{channel.get('channel', 'Unknown')}**\n"
-                            if channel.get("allocation"):
-                                formatted += (
-                                    f"- Budget: ${channel['allocation']:,.0f}\n"
-                                )
-                            if channel.get("rationale"):
-                                formatted += f"- {channel['rationale']}\n"
-                        else:
-                            formatted += f"- {channel}\n"
-                elif isinstance(channels, list):
-                    for channel in channels:
-                        formatted += f"- {channel}\n"
-                else:
-                    formatted += str(channels)
-                formatted += "\n\n"
-
-            # Budget Allocation
-            if strategy.get("budget_allocation"):
-                formatted += "### 💰 Budget Allocation\n\n"
-                budget = strategy["budget_allocation"]
-                if isinstance(budget, dict):
-                    total = budget.get("total_budget", 0)
-                    formatted += f"**Total Budget:** ${total:,.0f}\n\n"
-                    allocations = budget.get("allocations", [])
-                    for alloc in allocations:
-                        if isinstance(alloc, dict):
-                            formatted += f"- **{alloc.get('channel', 'Unknown')}:** ${alloc.get('amount', 0):,.0f} ({alloc.get('percentage', 0):.0f}%)\n"
-                formatted += "\n\n"
-
-            # Content Strategy
-            if strategy.get("content_strategy"):
-                formatted += "### 📝 Content Strategy\n\n"
-                content = strategy["content_strategy"]
-                if isinstance(content, dict):
-                    items = content.get("items", [])
-                    formatted += (
-                        f"**Duration:** {content.get('duration_weeks', 0)} weeks\n\n"
-                    )
-                    if items:
-                        formatted += "**Content Calendar:**\n"
-                        for item in items[:6]:  # Show first 6 items
-                            if isinstance(item, dict):
-                                formatted += f"- Week {item.get('week', '?')}: {item.get('theme', 'N/A')} - {item.get('format', 'N/A')}\n"
-                        if len(items) > 6:
-                            formatted += f"\n...and {len(items) - 6} more items\n"
-                formatted += "\n\n"
-
-            # KPIs
-            if strategy.get("kpis"):
-                formatted += "### 📊 Key Performance Indicators\n\n"
-                kpis = strategy["kpis"]
-                if isinstance(kpis, list):
-                    for kpi in kpis:
-                        if isinstance(kpi, dict):
-                            formatted += f"- **{kpi.get('metric', 'Unknown')}:** {kpi.get('target', 'N/A')}\n"
-                        else:
-                            formatted += f"- {kpi}\n"
-                formatted += "\n\n"
-
-            # Recommendations
-            if strategy.get("recommendations"):
-                formatted += "### 💡 Recommendations\n\n"
-                recommendations = strategy["recommendations"]
-                if isinstance(recommendations, list):
-                    for rec in recommendations:
-                        formatted += f"- {rec}\n"
-                else:
-                    formatted += str(recommendations)
-                formatted += "\n\n"
-
-        # Analytics results
-        elif "analytics" in result:
-            analytics = result["analytics"]
-
-            # Check if there's a report (it's a string with markdown content)
-            if isinstance(analytics, dict) and "report" in analytics:
-                report = analytics["report"]
-                # Report can be either a string or a dict with report_content
-                if isinstance(report, str):
-                    # Use the string directly (it's already markdown)
-                    formatted += report
-                    formatted += "\n\n"
-                elif isinstance(report, dict) and "report_content" in report:
-                    # Use the pre-formatted markdown report
-                    formatted += report["report_content"]
-                    formatted += "\n\n"
-                else:
-                    # Fallback: Format analytics data manually
-                    formatted += "# 📊 Analytics Report\n\n"
-
-                    # Add metrics if available
-                    if "metrics" in analytics:
-                        metrics = analytics["metrics"]
-                        if isinstance(metrics, dict):
-                            # Campaign metrics
-                            if "campaign_metrics" in metrics:
-                                formatted += "## Campaign Performance\n\n"
-                                cm = metrics["campaign_metrics"]
-                                formatted += f"- **CTR:** {cm.get('ctr', 0):.2f}%\n"
-                                formatted += f"- **Conversion Rate:** {cm.get('conversion_rate', 0):.2f}%\n"
-                                formatted += f"- **ROI:** {cm.get('roi', 0):.2f}%\n"
-                                formatted += f"- **Total Impressions:** {cm.get('total_impressions', 0):,}\n"
-                                formatted += f"- **Total Conversions:** {cm.get('total_conversions', 0):,}\n\n"
-
-                    # Add insights if available from report dict
-                    if isinstance(report, dict):
-                        insights = report.get("insights", [])
-                        if insights:
-                            formatted += "## 💡 Key Insights\n\n"
-                            for insight in insights:
-                                formatted += f"- {insight}\n"
-                            formatted += "\n"
-            else:
-                # Analytics exists but no proper report structure
-                formatted += "# 📊 Analytics Report\n\n"
-                formatted += str(analytics) + "\n\n"
-
-        # Learning/Feedback results (from feedback_learning agent)
-        elif "learning_results" in result:
-            learning = result["learning_results"]
-            feedback_type = learning.get("feedback_type", "")
-            request_type = learning.get("request_type", "")
-
-            # Performance Evaluation
-            if feedback_type == "performance_evaluation":
-                agent_name = learning.get("agent_name", "Agent")
-                formatted += f"# 📊 {agent_name.replace('_', ' ').title()} Performance Report\n\n"
-
-                analysis = learning.get("analysis", {})
-                if analysis:
-                    status = analysis.get("status", "Unknown")
-                    formatted += f"## Current Status: {status}\n\n"
-
-                    metrics = analysis.get("metrics", {})
-                    if metrics:
-                        formatted += "### 📈 Performance Metrics\n\n"
-                        for key, value in metrics.items():
-                            formatted += (
-                                f"- **{key.replace('_', ' ').title()}:** {value}\n"
-                            )
-                        formatted += "\n"
-
-                    if "performance_score" in analysis:
-                        formatted += f"**Overall Score:** {analysis['performance_score']:.2f}/1.0\n"
-                        formatted += (
-                            f"**Trend:** {analysis.get('trend', 'stable').title()}\n\n"
-                        )
-
-                # Recommendations
-                recommendations = learning.get("recommendations", [])
-                if recommendations:
-                    formatted += f"## 💡 {len(recommendations)} Recommendations\n\n"
-                    for i, rec in enumerate(recommendations, 1):
-                        formatted += f"### {i}. {rec.get('action', 'Action')}\n"
-                        formatted += f"**Priority:** {rec.get('priority', 'Medium')} | **Category:** {rec.get('category', 'General')}\n\n"
-                        formatted += f"{rec.get('details', '')}\n\n"
-                        formatted += f"*Expected Impact:* {rec.get('expected_impact', 'N/A')}\n\n"
-
-            # User Rating/Feedback
-            elif feedback_type == "user_rating":
-                formatted += "# 💬 User Feedback Analysis\n\n"
-
-                analysis = learning.get("analysis", {})
-                if analysis:
-                    rating = analysis.get("rating")
-                    if rating:
-                        stars = "⭐" * rating + "☆" * (5 - rating)
-                        formatted += f"## Rating: {rating}/5 {stars}\n\n"
-
-                    sentiment = analysis.get("sentiment", "").title()
-                    subject = (
-                        analysis.get("subject", "system").replace("_", " ").title()
-                    )
-                    formatted += f"**Subject:** {subject}\n"
-                    formatted += f"**Sentiment:** {sentiment}\n\n"
-
-                    issues = analysis.get("issues_mentioned", [])
-                    if issues:
-                        formatted += "**Issues Mentioned:**\n"
-                        for issue in issues:
-                            formatted += f"- {issue}\n"
-                        formatted += "\n"
-
-                # Recommendations
-                recommendations = learning.get("recommendations", [])
-                if recommendations:
-                    formatted += f"## 💡 {len(recommendations)} Improvement Actions\n\n"
-                    for i, rec in enumerate(recommendations, 1):
-                        formatted += f"### {i}. {rec.get('action', 'Action')}\n"
-                        formatted += f"**Priority:** {rec.get('priority', 'Medium')} | **Category:** {rec.get('category', 'General')}\n\n"
-                        formatted += f"{rec.get('details', '')}\n\n"
-                        formatted += f"*Expected Impact:* {rec.get('expected_impact', 'N/A')}\n\n"
-
-            # Recurring Issue / Pattern Detection
-            elif (
-                feedback_type == "recurring_issue" or request_type == "detect_patterns"
-            ):
-                formatted += "# 🔍 Issue Investigation Report\n\n"
-
-                analysis = learning.get("analysis", {})
-                if analysis:
-                    formatted += "## 📊 Issue Analysis\n\n"
-                    formatted += f"- **Affected Area:** {analysis.get('affected_area', 'Unknown').replace('_', ' ').title()}\n"
-                    formatted += f"- **Severity:** {analysis.get('severity', 'Unknown').title()}\n"
-                    formatted += f"- **Multiple Reports:** {'Yes' if analysis.get('multiple_reports') else 'No'}\n\n"
-
-                    issues = analysis.get("issues_identified", [])
-                    if issues:
-                        formatted += "**Issues Identified:**\n"
-                        for issue in issues:
-                            formatted += f"- {issue}\n"
-                        formatted += "\n"
-
-                # Recommendations
-                recommendations = learning.get("recommendations", [])
-                if recommendations:
-                    formatted += f"## 💡 {len(recommendations)} Recommended Actions\n\n"
-                    for i, rec in enumerate(recommendations, 1):
-                        formatted += f"### {i}. {rec.get('action', 'Action')}\n"
-                        formatted += f"**Priority:** {rec.get('priority', 'Medium')} | **Category:** {rec.get('category', 'General')}\n\n"
-                        formatted += f"{rec.get('details', '')}\n\n"
-                        formatted += f"*Expected Impact:* {rec.get('expected_impact', 'N/A')}\n\n"
-
-                # Next steps
-                next_steps = learning.get("next_steps", [])
-                if next_steps:
-                    formatted += "## 📋 Next Steps\n\n"
-                    for step in next_steps:
-                        formatted += f"- {step}\n"
-                    formatted += "\n"
-
-            # Success Pattern / Learning from Success
-            elif feedback_type == "success_pattern" or "key_learnings" in learning:
-                formatted += "# 🎓 Learning from Success\n\n"
-
-                analysis = learning.get("analysis", {})
-                if analysis:
-                    formatted += "## 📊 Success Analysis\n\n"
-                    success_type = (
-                        analysis.get("success_type", "general")
-                        .replace("_", " ")
-                        .title()
-                    )
-                    formatted += f"**Success Type:** {success_type}\n\n"
-
-                    metrics = analysis.get("metrics", {})
-                    if metrics:
-                        formatted += "**Key Metrics:**\n"
-                        for key, value in metrics.items():
-                            formatted += f"- {key.replace('_', ' ').title()}: {value}\n"
-                        formatted += "\n"
-
-                # Key learnings
-                learnings = learning.get("key_learnings", [])
-                if learnings:
-                    formatted += "## 🎯 Key Learnings\n\n"
-                    for learning_item in learnings:
-                        formatted += f"- {learning_item}\n"
-                    formatted += "\n"
-
-                # Recommendations
-                recommendations = learning.get("recommendations", [])
-                if recommendations:
-                    formatted += f"## 💡 {len(recommendations)} Recommendations\n\n"
-                    for i, rec in enumerate(recommendations, 1):
-                        formatted += f"### {i}. {rec.get('action', 'Action')}\n"
-                        formatted += f"**Priority:** {rec.get('priority', 'Medium')} | **Category:** {rec.get('category', 'General')}\n\n"
-                        formatted += f"{rec.get('details', '')}\n\n"
-                        formatted += f"*Expected Impact:* {rec.get('expected_impact', 'N/A')}\n\n"
-
-            # Prediction improvement analysis
-            elif request_type == "prediction_improvement":
-                formatted += "# 🎯 Prediction Improvement Analysis\n\n"
-
-                # Analysis section
-                analysis = learning.get("analysis", {})
-                if analysis:
-                    formatted += "## 📊 Current Status\n\n"
-                    formatted += f"**Query:** {analysis.get('query', 'N/A')}\n\n"
-
-                    current_metrics = analysis.get("current_metrics", {})
-                    if current_metrics:
-                        formatted += "**Current Performance:**\n"
-                        for key, value in current_metrics.items():
-                            formatted += f"- {key.replace('_', ' ').title()}: {value}\n"
-                        formatted += "\n"
-
-                    formatted += f"**Prediction Confidence:** {analysis.get('prediction_confidence', 'Unknown')}\n"
-                    formatted += f"**Data Quality:** {analysis.get('data_quality', 'Unknown')}\n\n"
-
-                # Recommendations section
-                recommendations = learning.get("recommendations", [])
-                if recommendations:
-                    formatted += f"## 💡 {len(recommendations)} Recommendations\n\n"
-                    for i, rec in enumerate(recommendations, 1):
-                        priority = rec.get("priority", "Medium")
-                        category = rec.get("category", "General")
-                        action = rec.get("action", "")
-                        details = rec.get("details", "")
-                        impact = rec.get("expected_impact", "")
-
-                        formatted += f"### {i}. {action}\n"
-                        formatted += (
-                            f"**Priority:** {priority} | **Category:** {category}\n\n"
-                        )
-                        formatted += f"{details}\n\n"
-                        formatted += f"*Expected Impact:* {impact}\n\n"
-
-                # Next steps
-                next_steps = learning.get("next_steps", [])
-                if next_steps:
-                    formatted += "## 📋 Next Steps\n\n"
-                    for step in next_steps:
-                        formatted += f"- {step}\n"
-                    formatted += "\n"
-
-            # Generic feedback/learning results (fallback)
-            else:
-                formatted += "# 📚 Learning & Feedback Analysis\n\n"
-
-                # Feedback summary
-                if "feedback_summary" in learning:
-                    summary = learning["feedback_summary"]
-                    formatted += "## 📊 Summary\n\n"
-                    formatted += (
-                        f"- Total Items Analyzed: {summary.get('total_items', 0)}\n"
-                    )
-                    formatted += f"- Time Range: {summary.get('time_range', 'N/A')}\n"
-                    formatted += (
-                        f"- Agents Analyzed: {summary.get('agents_analyzed', 0)}\n\n"
-                    )
-
-                # Improvements
-                if "improvements" in learning:
-                    formatted += "## 💡 Improvements\n\n"
-                    improvements = learning["improvements"]
-                    if isinstance(improvements, list):
-                        for improvement in improvements:
-                            if isinstance(improvement, dict):
-                                formatted += f"- **{improvement.get('action', '')}:** {improvement.get('details', '')}\n"
-                            else:
-                                formatted += f"- {improvement}\n"
-                    formatted += "\n"
-
-                # Agent evaluations
-                if "agent_evaluations" in learning:
-                    evals = learning["agent_evaluations"]
-                    if evals:
-                        formatted += "## 🎯 Agent Performance\n\n"
-                        for agent_id, evaluation in evals.items():
-                            score = evaluation.get("score", 0)
-                            trend = evaluation.get("trend", "stable")
-                            formatted += (
-                                f"**{agent_id}:** Score {score:.2f} ({trend})\n"
-                            )
-                        formatted += "\n"
-
-        # Extract main response (for customer support)
-        elif "response" in result:
-            formatted += result["response"] + "\n\n"
-        elif "answer" in result:
-            formatted += result["answer"] + "\n\n"
-        elif "analysis" in result:
-            formatted += "### Analysis Results\n\n"
-            analysis = result["analysis"]
-            if isinstance(analysis, dict):
-                for key, value in analysis.items():
-                    formatted += f"**{key.replace('_', ' ').title()}:** {value}\n\n"
-            else:
-                formatted += str(analysis) + "\n\n"
-
-        # Add citations if available (from customer support responses)
-        if "citations" in result and result["citations"]:
-            formatted += "### 📚 Sources\n\n"
-            for citation in result["citations"]:
-                if isinstance(citation, dict):
-                    source = citation.get("source", "Unknown")
-                    relevance = citation.get("relevance", 0)
-                    formatted += f"- {source} (relevance: {relevance:.0%})\n"
-                else:
-                    formatted += f"- {citation}\n"
-            formatted += "\n"
-
-        # Add sources if available
-        if "sources" in result and result["sources"]:
-            formatted += "### 📚 Sources\n\n"
-            for i, source in enumerate(result["sources"][:3], 1):
-                if isinstance(source, dict):
-                    title = source.get("title", source.get("source", f"Source {i}"))
-                    url = source.get("url", "")
-                    formatted += f"{i}. {title}"
-                    if url:
-                        formatted += f" - [{url}]({url})"
-                    formatted += "\n"
-                else:
-                    formatted += f"{i}. {source}\n"
-            formatted += "\n"
-
-        # Add metrics if available
-        if "metrics" in result:
-            formatted += "### 📊 Key Metrics\n\n"
-            metrics = result["metrics"]
-            if isinstance(metrics, dict):
-                for key, value in metrics.items():
-                    formatted += f"- **{key.replace('_', ' ').title()}:** {value}\n"
-            formatted += "\n"
-
-        # Add recommendations if available (if not already shown in strategy)
-        if "recommendations" in result and "strategy" not in result:
-            formatted += "### 💡 Recommendations\n\n"
-            recommendations = result["recommendations"]
-            if isinstance(recommendations, list):
-                for rec in recommendations:
-                    formatted += f"- {rec}\n"
-            else:
-                formatted += str(recommendations) + "\n"
-            formatted += "\n"
-
-        return (
-            formatted.strip() or "Processing complete. No detailed results available."
-        )
 
     def export_conversation(
         self, history: List[Dict[str, str]], conversation_id: str
@@ -1157,7 +347,8 @@ def build_interface():
                     msg = gr.Textbox(
                         label="Your message",
                         placeholder="Ask me anything about marketing, campaigns, or product questions...",
-                        lines=2,
+                        lines=1,
+                        max_lines=3,
                         scale=4,
                         container=False,
                     )
@@ -1228,14 +419,14 @@ def build_interface():
             inputs=[msg, agent_selector, chatbot, conversation_id_state],
             outputs=[chatbot, status, metrics, conversation_id_state],
             queue=True,
-        ).then(lambda: "", None, msg)
+        ).then(fn=lambda: gr.update(value=""), inputs=None, outputs=[msg])
 
         submit.click(
             fn=handle_message,
             inputs=[msg, agent_selector, chatbot, conversation_id_state],
             outputs=[chatbot, status, metrics, conversation_id_state],
             queue=True,
-        ).then(lambda: "", None, msg)
+        ).then(fn=lambda: gr.update(value=""), inputs=None, outputs=[msg])
 
         clear.click(
             fn=clear_conversation,

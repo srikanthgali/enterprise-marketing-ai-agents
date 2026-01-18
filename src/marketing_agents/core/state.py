@@ -22,6 +22,9 @@ class AgentExecutionRecord(TypedDict):
     status: str  # 'running', 'completed', 'failed'
     result: Optional[Dict[str, Any]]
     error: Optional[str]
+    is_handoff: Optional[bool]  # True if this execution was the result of a handoff
+    handoff_from: Optional[str]  # Source agent if this was a handoff
+    handoff_reason: Optional[str]  # Reason for handoff
 
 
 class AgentState(TypedDict):
@@ -162,13 +165,22 @@ def update_state_with_result(
     )
 
 
-def record_agent_start(state: AgentState, agent_id: str) -> AgentState:
+def record_agent_start(
+    state: AgentState,
+    agent_id: str,
+    is_handoff: bool = False,
+    handoff_from: str = None,
+    handoff_reason: str = None,
+) -> AgentState:
     """
     Record the start of an agent's execution in the workflow.
 
     Args:
         state: Current workflow state
         agent_id: ID of the agent starting execution
+        is_handoff: Whether this execution is the result of a handoff
+        handoff_from: Source agent ID if this is a handoff
+        handoff_reason: Reason for the handoff
 
     Returns:
         AgentState: Updated state with new execution record
@@ -180,6 +192,9 @@ def record_agent_start(state: AgentState, agent_id: str) -> AgentState:
         "status": "running",
         "result": None,
         "error": None,
+        "is_handoff": is_handoff,
+        "handoff_from": handoff_from,
+        "handoff_reason": handoff_reason,
     }
 
     updated_history = state["execution_history"].copy()
