@@ -1453,8 +1453,14 @@ with tab4:
         campaign_data_list = []
 
         # If no workflows or no campaign workflows, use synthetic execution data
+        # Match both traditional 'campaign_launch' and chat-based 'chat_campaign_creation' workflows
         campaign_workflows = (
-            [wf for wf in workflows if wf.get("workflow_type") == "campaign_launch"]
+            [
+                wf
+                for wf in workflows
+                if wf.get("workflow_type")
+                in ["campaign_launch", "chat_campaign_creation"]
+            ]
             if workflows
             else []
         )
@@ -1588,19 +1594,21 @@ with tab4:
         # Fetch fresh workflow data for handoff analysis
         all_workflows = get_workflows(limit=100)
 
-        # Debug info
-        if all_workflows:
-            st.caption(
-                f"Analyzing {len(all_workflows)} workflows for handoff patterns..."
-            )
-
         # ONLY count handoffs from actual workflow executions (not synthetic/historical data)
         handoff_counts = {}
         total_transitions = 0
         filtered_self_handoffs = 0
+        workflows_with_multiple_agents = 0
 
         if all_workflows:
             for workflow in all_workflows:
+                handoff_found = False
+                agents_exec = workflow.get("agents_executed", [])
+
+                # Debug: Count workflows with multiple agents
+                if len(agents_exec) > 1:
+                    workflows_with_multiple_agents += 1
+
                 # Method 1: Extract from state_transitions if available
                 if "state_transitions" in workflow and workflow["state_transitions"]:
                     state_transitions = workflow.get("state_transitions", [])
@@ -1617,11 +1625,31 @@ with tab4:
                         ):
                             key = f"{from_agent}-{to_agent}"
                             handoff_counts[key] = handoff_counts.get(key, 0) + 1
+                            handoff_found = True
                         elif from_agent == to_agent and from_agent != "Unknown":
                             filtered_self_handoffs += 1
 
-                # Method 2: Check for explicit handoff flag in result
-                elif workflow.get("result", {}).get("handoff_required"):
+                # Method 2: Extract from agents_executed when multiple agents were involved
+                # Only use this if we haven't found handoffs from state_transitions
+                if not handoff_found and (
+                    "agents_executed" in workflow
+                    and len(workflow.get("agents_executed", [])) > 1
+                ):
+                    agents = workflow["agents_executed"]
+                    for i in range(len(agents) - 1):
+                        from_agent = agents[i].replace("_", " ").title()
+                        to_agent = agents[i + 1].replace("_", " ").title()
+
+                        if from_agent != to_agent:
+                            key = f"{from_agent}-{to_agent}"
+                            handoff_counts[key] = handoff_counts.get(key, 0) + 1
+                            handoff_found = True
+
+                # Method 3: Check for explicit handoff flag in result
+                # Only use this if we haven't found handoffs from other methods
+                if not handoff_found and workflow.get("result", {}).get(
+                    "handoff_required"
+                ):
                     result = workflow.get("result", {})
                     agents_executed = workflow.get("agents_executed", [])
                     target_agent = result.get("target_agent")
@@ -1636,86 +1664,87 @@ with tab4:
 
         # Build dataframe from actual handoffs
         if handoff_counts:
-            handoff_data = []
-            for handoff, count in handoff_counts.items():
-                from_agent, to_agent = handoff.split("-")
-                handoff_data.append(
-                    {"From": from_agent, "To": to_agent, "Count": count}
-                )
-
-            handoff_df = pd.DataFrame(handoff_data)
-
-            # Create appealing chord/arc diagram style visualization
-            st.subheader("🔄 Agent Collaboration Network")
-
-            # Filter out self-loops for cleaner visualization
-            handoff_df_filtered = handoff_df[
-                handoff_df["From"] != handoff_df["To"]
-            ].copy()
-
-            if not handoff_df_filtered.empty:
-                # Create a clean bar chart showing handoff patterns
-                handoff_df_filtered["Flow"] = (
-                    handoff_df_filtered["From"] + " → " + handoff_df_filtered["To"]
-                )
-                handoff_df_sorted = handoff_df_filtered.sort_values(
-                    "Count", ascending=True
-                )
-
-                fig_flow = px.bar(
-                    handoff_df_sorted,
-                    x="Count",
-                    y="Flow",
-                    orientation="h",
-                    title="Agent-to-Agent Handoff Frequency",
-                    labels={"Count": "Number of Handoffs", "Flow": "Agent Flow"},
-                    color="Count",
-                    color_continuous_scale="Blues",
-                    height=max(300, len(handoff_df_sorted) * 40),
-                )
-
-                fig_flow.update_layout(
-                    showlegend=False,
-                    xaxis_title="Handoff Count",
-                    yaxis_title="",
-                    font=dict(size=12),
-                    margin=dict(l=200, r=20, t=50, b=50),
-                )
-
-                fig_flow.update_traces(
-                    marker=dict(line=dict(color="#000000", width=1)),
-                    texttemplate="%{x}",
-                    textposition="outside",
-                )
-
-                st.plotly_chart(fig_flow, use_container_width=True)
-            else:
-                st.info(
-                    "No inter-agent handoffs detected yet. All workflows completed within a single agent."
-                )
-
-            # Show summary statistics
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Total Handoffs", handoff_df["Count"].sum())
-            with col2:
-                most_common = handoff_df.nlargest(1, "Count")
-                if not most_common.empty:
-                    st.metric(
-                        "Most Common Handoff",
-                        f"{most_common.iloc[0]['From']} → {most_common.iloc[0]['To']}",
-                        delta=f"{most_common.iloc[0]['Count']} times",
+            try:
+                handoff_data = []
+                for handoff, count in handoff_counts.items():
+                    from_agent, to_agent = handoff.split("-")
+                    handoff_data.append(
+                        {"From": from_agent, "To": to_agent, "Count": count}
                     )
-            with col3:
-                st.metric("Unique Agent Pairs", len(handoff_df))
 
-            # Optional: Show detailed breakdown table
-            with st.expander("📊 View Detailed Handoff Statistics"):
-                st.dataframe(
-                    handoff_df.sort_values("Count", ascending=False),
-                    use_container_width=True,
-                    hide_index=True,
-                )
+                handoff_df = pd.DataFrame(handoff_data)
+
+                # Filter out self-loops for cleaner visualization
+                handoff_df_filtered = handoff_df[
+                    handoff_df["From"] != handoff_df["To"]
+                ].copy()
+
+                if not handoff_df_filtered.empty:
+                    # Create a clean bar chart showing handoff patterns
+                    handoff_df_filtered["Flow"] = (
+                        handoff_df_filtered["From"] + " → " + handoff_df_filtered["To"]
+                    )
+                    handoff_df_sorted = handoff_df_filtered.sort_values(
+                        "Count", ascending=True
+                    )
+
+                    fig_flow = px.bar(
+                        handoff_df_sorted,
+                        x="Count",
+                        y="Flow",
+                        orientation="h",
+                        title="Agent-to-Agent Handoff Frequency",
+                        labels={"Count": "Number of Handoffs", "Flow": "Agent Flow"},
+                        color="Count",
+                        color_continuous_scale="Blues",
+                        height=max(300, len(handoff_df_sorted) * 40),
+                    )
+
+                    fig_flow.update_layout(
+                        showlegend=False,
+                        xaxis_title="Handoff Count",
+                        yaxis_title="",
+                        font=dict(size=12),
+                        margin=dict(l=200, r=20, t=50, b=50),
+                    )
+
+                    fig_flow.update_traces(
+                        marker=dict(line=dict(color="#000000", width=1)),
+                        texttemplate="%{x}",
+                        textposition="outside",
+                    )
+
+                    st.plotly_chart(fig_flow, use_container_width=True)
+                else:
+                    st.info(
+                        "No inter-agent handoffs detected yet. All workflows completed within a single agent."
+                    )
+
+                # Show summary statistics
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Total Handoffs", handoff_df["Count"].sum())
+                with col2:
+                    most_common = handoff_df.nlargest(1, "Count")
+                    if not most_common.empty:
+                        st.metric(
+                            "Most Common Handoff",
+                            f"{most_common.iloc[0]['From']} → {most_common.iloc[0]['To']}",
+                            delta=f"{most_common.iloc[0]['Count']} times",
+                        )
+                with col3:
+                    st.metric("Unique Agent Pairs", len(handoff_df))
+
+                # Optional: Show detailed breakdown table
+                with st.expander("📊 View Detailed Handoff Statistics"):
+                    st.dataframe(
+                        handoff_df.sort_values("Count", ascending=False),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+            except Exception as e:
+                st.error(f"Error creating handoff visualization: {e}")
+                st.caption(f"Debug: handoff_counts = {handoff_counts}")
         else:
             # Show debug info about why no handoffs were found
             if all_workflows:
@@ -1726,10 +1755,12 @@ with tab4:
                         f"No inter-agent handoffs detected - all workflows completed within a single agent or had only self-handoffs."
                     )
                 else:
-                    st.info(
-                        f"📊 Analyzed {len(all_workflows)} workflows but found no state transitions. "
-                        f"Workflows may not have completed yet or may not have handoff data."
-                    )
+                    debug_msg = f"📊 Analyzed {len(all_workflows)} workflows but found no state transitions."
+                    if workflows_with_multiple_agents > 0:
+                        debug_msg += f" Note: {workflows_with_multiple_agents} workflows have multiple agents but handoffs were not extracted. This may be a code issue."
+                    else:
+                        debug_msg += " All workflows completed within a single agent."
+                    st.info(debug_msg)
             else:
                 st.info(
                     "📊 No workflow data available. Run workflows with multiple agents to generate handoff statistics."

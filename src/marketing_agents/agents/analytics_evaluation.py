@@ -54,7 +54,11 @@ class AnalyticsEvaluationAgent(BaseAgent):
         self.metrics_history: List[Dict] = []
         self.kpi_definitions = {}
         # Initialize LLM-driven handoff detector
-        handoff_config = self.config.get("agents", {}).get("orchestrator", {}).get("handoff_detector")
+        handoff_config = (
+            self.config.get("agents", {})
+            .get("orchestrator", {})
+            .get("handoff_detector")
+        )
         self.handoff_detector = HandoffDetector(llm=self.llm, config=handoff_config)
 
     def should_handoff(self, context: Dict[str, Any]) -> Optional[Any]:
@@ -263,9 +267,25 @@ class AnalyticsEvaluationAgent(BaseAgent):
                 == ("marketing_strategy", "analytics_evaluation")
             )
 
+            # Check if the report already contains recommendations
+            # If analytics already provided actionable recommendations, no need to handoff
+            has_recommendations = False
+            if isinstance(report, str):
+                report_lower = report.lower()
+                # Check if report has substantial recommendations section
+                has_recommendations = (
+                    "recommendations" in report_lower
+                    or "recommendation" in report_lower
+                ) and len(
+                    report
+                ) > 500  # Substantial content
+
             # Check if handoff is needed based on analysis results
-            # But skip if we're already handling a handoff result OR if we detect a loop
-            if is_handoff_result or loop_count >= 1:
+            # Skip handoff if:
+            # 1. We're already handling a handoff result
+            # 2. We detect a loop
+            # 3. The report already contains detailed recommendations
+            if is_handoff_result or loop_count >= 1 or has_recommendations:
                 if is_handoff_result:
                     self.logger.info(
                         f"Processing handoff from {input_data.get('from_agent')}. "
@@ -275,6 +295,11 @@ class AnalyticsEvaluationAgent(BaseAgent):
                     self.logger.warning(
                         f"Detected handoff loop (count={loop_count}). "
                         "Completing analysis without further handoffs to prevent infinite loop."
+                    )
+                elif has_recommendations:
+                    self.logger.info(
+                        f"Report already contains detailed recommendations ({len(report)} chars). "
+                        "Completing analysis without handoff."
                     )
                 handoff_info = {}
             else:
@@ -990,16 +1015,70 @@ class AnalyticsEvaluationAgent(BaseAgent):
             self.logger.error(f"Handoff detection failed: {e}", exc_info=True)
             return {}
 
+    def _extract_user_provided_metrics(self, user_query: str) -> dict:
+        """Extract numeric metrics mentioned by user in the query."""
+        import re
+
+        extracted = {}
+        query_lower = user_query.lower()
+
+        # Extract conversion rate (e.g., "2.5%", "conversion rate is 2.5")
+        conv_patterns = [
+            r"conversion rate\s+(?:is|of|at)?\s*(\d+\.?\d*)\s*%?",
+            r"(\d+\.?\d*)\s*%\s+conversion",
+            r"converting\s+at\s+(\d+\.?\d*)\s*%?",
+        ]
+        for pattern in conv_patterns:
+            match = re.search(pattern, query_lower)
+            if match:
+                extracted["conversion_rate"] = float(match.group(1))
+                break
+
+        # Extract CTR
+        ctr_patterns = [
+            r"ctr\s+(?:is|of|at)?\s*(\d+\.?\d*)\s*%?",
+            r"click.through.rate\s+(?:is|of|at)?\s*(\d+\.?\d*)\s*%?",
+        ]
+        for pattern in ctr_patterns:
+            match = re.search(pattern, query_lower)
+            if match:
+                extracted["ctr"] = float(match.group(1))
+                break
+
+        # Extract ROI
+        roi_patterns = [
+            r"roi\s+(?:is|of|at)?\s*(\d+\.?\d*)\s*%?",
+            r"return\s+(?:on|of)\s+(?:investment)?\s+(?:is|of|at)?\s*(\d+\.?\d*)\s*%?",
+        ]
+        for pattern in roi_patterns:
+            match = re.search(pattern, query_lower)
+            if match:
+                extracted["roi"] = float(match.group(1))
+                break
+
+        return extracted
+
     def _generate_contextual_report(self, metrics: dict, user_query: str) -> str:
         """Generate contextual report based on user query."""
         campaign = metrics.get("campaign_metrics", {})
 
-        # Extract key metrics
-        roi = campaign.get("roi", 0)
-        ctr = campaign.get("ctr", 0)
-        conversion_rate = campaign.get("conversion_rate", 0)
+        # First, try to extract metrics mentioned by the user
+        user_provided_metrics = self._extract_user_provided_metrics(user_query)
+
+        # Use user-provided metrics if available, otherwise fall back to calculated metrics
+        roi = user_provided_metrics.get("roi", campaign.get("roi", 0))
+        ctr = user_provided_metrics.get("ctr", campaign.get("ctr", 0))
+        conversion_rate = user_provided_metrics.get(
+            "conversion_rate", campaign.get("conversion_rate", 0)
+        )
         impressions = campaign.get("total_impressions", 0)
         conversions = campaign.get("total_conversions", 0)
+
+        # Log if we're using user-provided metrics
+        if user_provided_metrics:
+            self.logger.info(
+                f"Using user-provided metrics from query: {user_provided_metrics}"
+            )
 
         # Create contextual response based on query keywords
         query_lower = user_query.lower()
@@ -1274,18 +1353,132 @@ Based on your query: "{user_query}"
 {"Excellent engagement! Your CTR is above industry average." if ctr > 2.5 else "CTR is moderate. Consider testing new ad creatives or targeting." if ctr > 1.5 else "CTR is below average. Immediate optimization recommended."}
 """
         elif any(word in query_lower for word in ["conversion", "converting"]):
+            # Determine if this is about improving conversions
+            is_improvement_query = any(
+                word in query_lower
+                for word in [
+                    "improve",
+                    "increase",
+                    "boost",
+                    "optimize",
+                    "recommendations",
+                    "recommend",
+                    "how to",
+                ]
+            )
+
+            # Benchmark against industry standards
+            industry_avg = 2.5  # Industry average conversion rate
+            gap = conversion_rate - industry_avg
+
             report = f"""# Conversion Analysis
 
 Based on your query: "{user_query}"
 
 ## Current Conversion Performance
-- **Conversion Rate**: {conversion_rate:.2f}%
-- **Total Conversions**: {conversions:,}
-- **CTR**: {ctr:.2f}%
+- **Your Conversion Rate**: {conversion_rate:.2f}%
+- **Industry Average**: {industry_avg:.2f}%
+- **Performance Gap**: {'+' if gap > 0 else ''}{gap:.2f}% {"(Above average ✓)" if gap > 0 else "(Below average)" if gap < 0 else "(At average)"}"""
+
+            if conversions > 0:
+                report += f"""
+- **Total Conversions**: {conversions:,}"""
+
+            if ctr > 0:
+                report += f"""
+- **CTR**: {ctr:.2f}%"""
+
+            # Analysis section
+            report += f"""
 
 ## Analysis
-{"Strong conversion rate! Your campaigns are effectively driving actions." if conversion_rate > 3 else "Conversion rate is moderate. Optimize landing pages and CTAs." if conversion_rate > 2 else "Low conversion rate. Review user journey and remove friction points."}
 """
+            if conversion_rate > 3:
+                report += f"""Strong conversion rate! Your campaigns are effectively driving actions at {conversion_rate:.2f}%."""
+            elif conversion_rate > 2:
+                report += f"""Moderate conversion rate at {conversion_rate:.2f}%. There's opportunity to optimize landing pages and CTAs."""
+            else:
+                report += f"""Your conversion rate of {conversion_rate:.2f}% is below optimal. This indicates friction points in the user journey that should be addressed."""
+
+            # Recommendations section - always provide when asked about conversions
+            if is_improvement_query or conversion_rate < 3:
+                report += f"""
+
+## Recommendations to Improve Conversion Rate
+
+### Quick Wins (Implement This Week)
+1. **Optimize Landing Pages**
+   - Ensure message match between ads and landing pages
+   - Remove unnecessary form fields (reduce from 10+ to 5 or fewer)
+   - Add social proof (testimonials, reviews, trust badges)
+   - Improve page load speed (target < 2 seconds)
+
+2. **Strengthen Call-to-Action**
+   - Make CTAs more prominent with contrasting colors
+   - Use action-oriented copy ("Start Free Trial" vs "Submit")
+   - Place CTAs above the fold and repeat throughout page
+   - Test button size and placement
+
+3. **Reduce Friction**
+   - Enable autofill for forms
+   - Offer guest checkout options
+   - Minimize steps in conversion process
+   - Add progress indicators for multi-step flows
+
+### Medium-Term Optimizations (This Month)
+4. **A/B Testing**
+   - Test headline variations focusing on benefits
+   - Experiment with different offer structures
+   - Try various page layouts and designs
+   - Test pricing presentation and anchor points
+
+5. **Audience Targeting**
+   - Refine targeting to reach higher-intent users
+   - Create separate campaigns for different funnel stages
+   - Exclude converting users from prospecting campaigns
+   - Build lookalike audiences from converters
+
+### Strategic Initiatives (This Quarter)
+6. **User Experience Enhancement**
+   - Conduct user testing to identify pain points
+   - Implement exit-intent popups with special offers
+   - Add live chat support for real-time assistance
+   - Create FAQ section addressing common objections
+
+7. **Trust Building**
+   - Display security badges prominently
+   - Add money-back guarantee or risk-free trial
+   - Show customer testimonials and case studies
+   - Include industry certifications and awards
+
+8. **Retargeting Strategy**
+   - Set up abandoned cart recovery campaigns
+   - Create sequential retargeting ads
+   - Offer time-limited incentives to returners
+   - Use dynamic product ads for e-commerce
+
+## Expected Impact
+Implementing these recommendations could potentially increase your conversion rate by:
+- Quick wins: +0.3% to +0.5% improvement
+- Medium-term: +0.5% to +1.0% improvement
+- Strategic initiatives: +1.0% to +2.0% improvement
+
+**Target Conversion Rate**: {conversion_rate + 1.5:.2f}% (achievable within 3-6 months)
+
+## Next Steps
+1. Prioritize recommendations based on effort vs impact
+2. Set up A/B tests to validate changes
+3. Track metrics weekly to measure progress
+4. Document learnings for future optimization
+"""
+            else:
+                report += f"""
+
+## Recommendations
+Continue monitoring conversion trends and maintain current performance levels.
+"""
+
+            return report
         elif any(
             word in query_lower for word in ["performance", "metrics", "campaign"]
         ):
