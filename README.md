@@ -218,7 +218,7 @@ Continuously improves the system through learning from outcomes and pattern dete
 
 ## 🎥 Demo Video
 
-> **Coming Soon!** A comprehensive video walkthrough demonstrating the multi-agent system in action.
+A comprehensive video walkthrough demonstrating the multi-agent system in action.
 
 The demo will showcase:
 - LLM-driven intent classification and routing
@@ -227,8 +227,7 @@ The demo will showcase:
 - Interactive dashboards (Streamlit & Gradio)
 - End-to-end workflow examples
 
-*Video will be available in the [assets](assets/) folder.*
-
+https://github.com/user-attachments/assets/14bbfe11-b505-43c8-b1f1-413dd2bf2d9e
 ---
 
 ## 📁 Project Structure
